@@ -16,13 +16,13 @@ jobs:
         run: uv sync --extra dev
 
       - name: ruff format
-        run: ruff format --check .
+        run: uv run ruff format --check .
 
       - name: ruff check
-        run: ruff check .
+        run: uv run ruff check .
 
       - name: mypy
-        run: mypy
+        run: uv run mypy
 
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -40,7 +40,7 @@ jobs:
         run: uv sync --extra dev --python ${{ matrix.python-version }}
 
       - name: Run tests
-        run: pytest src/ --cov=hamster --cov-report=xml
+        run: uv run --python ${{ matrix.python-version }} pytest src/ --cov=hamster --cov-report=xml
 
       - name: Upload coverage
         if: matrix.python-version == '3.14'
