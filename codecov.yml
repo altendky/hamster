@@ -1,0 +1,39 @@
+# Codecov configuration
+# See: https://docs.codecov.com/docs/codecov-yaml
+
+coverage:
+  status:
+    project:
+      default:
+        # Ratchet --- fail if coverage drops more than 2% from main
+        threshold: 2%
+    patch:
+      default:
+        # New code must be fully covered or explicitly excluded
+        target: 100%
+
+comment:
+  layout: "header, diff, flags, components"
+  behavior: default
+  require_changes: true
+
+flags:
+  python:
+    paths:
+      - src/
+    carryforward: true
+
+component_management:
+  individual_components:
+    - component_id: core
+      name: MCP Core (sans-IO)
+      paths:
+        - src/hamster/mcp/_core/**
+    - component_id: io
+      name: MCP I/O Adapter
+      paths:
+        - src/hamster/mcp/_io/**
+    - component_id: component
+      name: HA Component
+      paths:
+        - src/hamster/component/**

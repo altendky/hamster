@@ -1,0 +1,61 @@
+site_name: Hamster
+site_description: Home Assistant MCP Server
+site_url: https://altendky.github.io/hamster
+repo_url: https://github.com/altendky/hamster
+repo_name: altendky/hamster
+
+docs_dir: src
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Project: project/index.md
+  - Core Design:
+      - Principles: project/principles.md
+      - Architecture: project/architecture.md
+      - Data Flow: project/data-flow.md
+  - Features:
+      - MCP Protocol: project/mcp-protocol.md
+      - Tool Generation: project/tool-generation.md
+      - Tristate Control: project/tristate-control.md
+      - Configuration: project/configuration.md
+  - Infrastructure:
+      - CI: project/ci.md
+      - Development: project/development.md
+      - Release: project/release.md
+  - Project Management:
+      - Decisions: project/decisions.md
+      - Open Questions: project/open-questions.md
+
+markdown_extensions:
+  - tables
+  - admonition
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true

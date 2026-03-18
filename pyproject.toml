@@ -1,0 +1,105 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hamster"
+version = "0.0.1"
+description = "Home Assistant MCP Server — exposes HA capabilities via the Model Context Protocol"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE*"]
+# Minimum Python version tracks the oldest Python required by any
+# currently-supported Home Assistant release.  HA 2025.2+ requires
+# Python >= 3.13; HA 2026.3+ requires >= 3.14.  Update this floor
+# when older HA versions fall out of practical use.
+requires-python = ">=3.13"
+authors = [
+    { name = "Kyle Altendorf" },
+]
+keywords = ["home-assistant", "mcp", "model-context-protocol", "home-automation"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Home Automation",
+]
+# No runtime dependencies beyond stdlib.  aiohttp and homeassistant are
+# provided by the HA runtime and must not be listed here.
+dependencies = []
+
+[project.optional-dependencies]
+# Test dependencies — installable by users to verify their install:
+#   pip install hamster[test] && pytest --pyargs hamster
+test = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+]
+# Development tools — linting, type checking, test deps, aiohttp for I/O tests
+dev = [
+    "hamster[test]",
+    "aiohttp",
+    "ruff",
+    "mypy",
+]
+docs = [
+    "mkdocs-material",
+]
+
+[project.urls]
+Homepage = "https://github.com/altendky/hamster"
+Documentation = "https://github.com/altendky/hamster"
+Repository = "https://github.com/altendky/hamster"
+Issues = "https://github.com/altendky/hamster/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hamster"]
+
+[tool.pytest.ini_options]
+testpaths = ["src"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+required-version = ">=0.11"
+
+[tool.ruff.lint]
+select = [
+    "A",      # flake8-builtins
+    "ASYNC",  # flake8-async
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "D",      # pydocstyle
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "PERF",   # perflint
+    "PIE",    # flake8-pie
+    "PT",     # flake8-pytest-style
+    "RET",    # flake8-return
+    "RUF",    # ruff-specific
+    "SIM",    # flake8-simplify
+    "T20",    # flake8-print
+    "TC",     # flake8-type-checking
+    "TID",    # flake8-tidy-imports
+    "UP",     # pyupgrade
+    "W",      # pycodestyle warnings
+]
+ignore = [
+    "D203",   # conflicts with D211
+    "D213",   # conflicts with D212
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+known-first-party = ["hamster"]
+
+[tool.mypy]
+strict = true
+packages = ["hamster"]
+mypy_path = "src"

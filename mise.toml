@@ -1,0 +1,14 @@
+[tools]
+# Match the Python version required by the latest stable Home Assistant
+# release (2026.3.x requires Python 3.14).
+python = "3.14"
+uv = "latest"
+"pipx:pre-commit" = "4.5.1"
+
+[settings]
+# Auto-create and activate a .venv managed by uv.
+python.uv_venv_auto = "create|source"
+
+[env]
+# Ensure uv uses the mise-managed Python interpreter, not a system one.
+UV_PYTHON = { value = "{{ tools.python.path }}", tools = true }

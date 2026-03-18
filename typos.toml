@@ -1,0 +1,12 @@
+# Spell checker configuration
+# See: https://github.com/crate-ci/typos
+
+[default.extend-words]
+# "hass" is the standard abbreviation for Home Assistant, used pervasively
+# in HA's codebase (e.g. hass.services, hass.states).
+hass = "hass"
+# "alls-green" is a GitHub Action (re-actors/alls-green) used in CI.
+alls = "alls"
+
+[files]
+extend-exclude = []

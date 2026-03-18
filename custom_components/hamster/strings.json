@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Hamster MCP",
+        "description": "Set up the Hamster MCP server to expose Home Assistant services via the Model Context Protocol."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only a single instance of Hamster MCP is allowed."
+    }
+  }
+}

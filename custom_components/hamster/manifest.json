@@ -1,0 +1,13 @@
+{
+  "domain": "hamster",
+  "name": "Hamster MCP",
+  "version": "0.0.1",
+  "documentation": "https://github.com/altendky/hamster",
+  "issue_tracker": "https://github.com/altendky/hamster/issues",
+  "codeowners": ["@altendky"],
+  "config_flow": false,
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "requirements": ["hamster>=0.0.1"],
+  "single_config_entry": true
+}
