@@ -1,0 +1,40 @@
+name: Renovate
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  renovate:
+    name: Renovate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        id: app-token
+        with:
+          app-id: ${{ vars.RENOVATE_APP_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+
+      - uses: jdx/mise-action@c1ecc8f748cd28cdeabf76dab3cccde4ce692fe4 # v4
+        with:
+          install: false
+
+      - id: mise-path
+        run: |
+          bin=$(which mise)
+          if [[ -z "$bin" ]]; then
+            echo "::error::mise binary not found in PATH"
+            exit 1
+          fi
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+      - uses: renovatebot/github-action@abd08c7549b2a864af5df4a2e369c43f035a6a9d # v46.1.5
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          docker-volumes: /tmp:/tmp;${{ steps.mise-path.outputs.bin }}:/usr/local/bin/mise
+        env:
+          RENOVATE_REPOSITORIES: '["${{ github.repository }}"]'
+          RENOVATE_ALLOWED_COMMANDS: '["^mise lock [A-Za-z0-9_./:-]+$"]'
