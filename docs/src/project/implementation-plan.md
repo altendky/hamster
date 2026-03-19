@@ -444,7 +444,7 @@ Parses tool name into domain/service, returns
 All arguments (including target keys like `entity_id`) are passed as
 `data` without separation --- HA accepts target keys in `service_data`
 and extracts them internally (see Q009).
-Raises `ValueError` on unparseable names.
+Raises `ValueError` on unparsable names.
 
 ### Continuation
 
