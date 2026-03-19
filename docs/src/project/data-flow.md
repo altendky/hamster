@@ -127,8 +127,10 @@ sequenceDiagram
 
 ## Tool Generation (Pure Function)
 
-The `services_to_mcp_tools()` function is pure --- it has no I/O dependencies.
-The I/O layer calls `hass.services.async_services()` and feeds the result in.
+The `services_to_mcp_tools()` function lives in `hamster.mcp._core.tools` ---
+it is pure (no I/O, no global state).
+The component layer calls `hass.services.async_services()` and feeds the
+result in.
 
 ```mermaid
 flowchart LR

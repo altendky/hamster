@@ -9,13 +9,13 @@ block-beta
         d1["custom_components/hamster/<br/>HACS shim — thin re-exports + HA data files"]
     end
     block:app["Application Layer"]
-        a1["hamster.component<br/>HA integration — config flow, views, tool generation"]
+        a1["hamster.component<br/>HA integration — config flow, views, effect dispatch"]
     end
     block:integration["Integration Layer"]
         i1["hamster.mcp._io<br/>aiohttp Streamable HTTP transport adapter"]
     end
     block:core["Core Layer"]
-        c1["hamster.mcp._core<br/>sans-IO MCP protocol: session, state machine, types<br/>NO asyncio — NO aiohttp — NO homeassistant"]
+        c1["hamster.mcp._core<br/>sans-IO MCP protocol + tool generation<br/>No I/O — no global state"]
     end
 
     d1 --> a1
@@ -37,9 +37,10 @@ hamster/
 │       │   ├── __init__.py               # Public API re-exports
 │       │   ├── _core/                    # Sans-IO protocol core
 │       │   │   ├── __init__.py
-│       │   │   ├── events.py             # Effect/event types
+│       │   │   ├── events.py             # Protocol events + tool effect/continuation types
 │       │   │   ├── session.py            # Server session + state machine
 │       │   │   ├── jsonrpc.py            # JSON-RPC 2.0 parsing/building
+│       │   │   ├── tools.py              # Tool generation, call_tool(), resume()
 │       │   │   └── types.py              # MCP data types (Tool, Content, etc.)
 │       │   ├── _io/                      # I/O adapters
 │       │   │   ├── __init__.py
@@ -50,8 +51,7 @@ hamster/
 │           ├── __init__.py               # async_setup_entry, async_unload_entry
 │           ├── config_flow.py            # Config + options flows
 │           ├── const.py                  # DOMAIN, defaults
-│           ├── http.py                   # HomeAssistantView wiring
-│           ├── tools.py                  # HA services → MCP tools
+│           ├── http.py                   # HomeAssistantView + MCPHandler + effect dispatch
 │           └── _tests/
 │               └── ...
 ├── custom_components/
@@ -81,22 +81,22 @@ hamster/
 | --- | --- | --- |
 | `hamster.mcp._core.types` | Core | MCP data types: `Tool`, `Content`, `ServerInfo`, `ServerCapabilities` |
 | `hamster.mcp._core.jsonrpc` | Core | JSON-RPC 2.0 message parsing and response building |
-| `hamster.mcp._core.events` | Core | Inbound event types (`InitializeRequested`, `ToolCallRequested`, etc.) |
+| `hamster.mcp._core.events` | Core | Protocol events (`InitializeRequested`, `ToolCallRequested`, etc.) and tool effect/continuation types (`Done`, `ServiceCall`, `FormatServiceResponse`) |
 | `hamster.mcp._core.session` | Core | `MCPServerSession` --- sans-IO session with state machine |
+| `hamster.mcp._core.tools` | Core | Pure tool generation (`services_to_mcp_tools`), `call_tool()`, `resume()` |
 | `hamster.mcp._io.aiohttp` | Integration | `AiohttpMCPTransport` --- bridges aiohttp requests to `MCPServerSession` |
 | `hamster.component` | Application | HA integration entry point (`async_setup_entry`, `async_unload_entry`) |
 | `hamster.component.config_flow` | Application | Config flow (setup) + options flow (tristate control) |
-| `hamster.component.http` | Application | `HamsterMCPView` --- `HomeAssistantView` subclass, wires transport + HA auth |
-| `hamster.component.tools` | Application | Pure function: HA service schemas to MCP tool definitions |
+| `hamster.component.http` | Application | `HamsterMCPView` --- `HomeAssistantView` subclass, wires transport + HA auth. `HamsterMCPHandler` --- implements `MCPHandler`, runs effect dispatch loop. |
 | `hamster.component.const` | Application | Domain constant, defaults |
 | `custom_components/hamster/` | Deployment | HACS shim --- thin re-exports so HA can discover the integration |
 
 ## Handler Protocol
 
 The I/O transport must delegate application-specific work (listing tools,
-executing tool calls) to the component layer, but cannot import
-`homeassistant`.
-The `MCPHandler` protocol defines this boundary.
+executing tool calls) to the component layer.
+The transport is kept HA-independent for testability, so it delegates via the
+`MCPHandler` protocol rather than calling HA APIs directly.
 
 ```mermaid
 flowchart TB
