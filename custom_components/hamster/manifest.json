@@ -2,7 +2,7 @@
   "domain": "hamster",
   "name": "Hamster MCP",
   "codeowners": ["@altendky"],
-  "config_flow": false,
+  "config_flow": true,
   "documentation": "https://github.com/altendky/hamster",
   "integration_type": "service",
   "iot_class": "local_push",

@@ -39,9 +39,10 @@ pytest src/             # Tests
 ## Package Structure
 
 - `src/hamster/mcp/_core/` --- sans-IO protocol core.
-  **Must not** import `asyncio`, `aiohttp`, or `homeassistant`.
-- `src/hamster/mcp/_io/` --- I/O adapters.
-  **Must not** import `homeassistant`.
+  **Must not** perform I/O or hold global state.
+  May depend on any library as long as the code itself remains pure.
+- `src/hamster/mcp/_io/` --- I/O adapters (async transport).
+  Does not import `homeassistant` (HA-independent for testability).
 - `src/hamster/component/` --- HA integration.
   May import anything.
 - `custom_components/hamster/` --- HACS deployment shim.

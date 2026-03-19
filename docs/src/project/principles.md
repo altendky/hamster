@@ -6,10 +6,10 @@ The project follows **full sans-IO design principles** to maximize testability.
 
 ### Core Principles
 
-1. **Core modules have zero I/O dependencies** --- no asyncio, no aiohttp,
-   no network, no filesystem
-2. **Core modules CAN have pure computation dependencies** --- stdlib only for
-   now, potentially `dataclasses`, `enum`, `json`, `re`, etc.
+1. **Core modules perform no I/O and hold no global state** --- no network,
+   no filesystem, no event loops, no mutable module-level state
+2. **Core modules may have dependencies** --- any library is allowed as long
+   as the core code itself performs no I/O and references no global state
 3. **State machines over async/await in core** --- pure functions that produce
    effects
 4. **Effects are data** --- I/O operations are represented as frozen dataclasses
@@ -60,9 +60,9 @@ def resume(
     """Pure dispatch: continuation + I/O result -> next effect."""
     ...
 
-# I/O module --- interprets effects in a loop
-async def dispatch_effect(
-    hass: HomeAssistant,
+# I/O transport --- runs the dispatch loop, delegates I/O to EffectHandler
+async def run_effects(
+    effect_handler: EffectHandler,
     effect: ToolEffect,
 ) -> CallToolResult:
     current = effect
@@ -76,12 +76,12 @@ async def dispatch_effect(
                 data=data,
                 continuation=continuation,
             ):
-                result = await hass.services.async_call(
-                    domain, service, data, blocking=True,
+                result = await effect_handler.execute_service_call(
+                    domain, service, data,
                 )
                 current = resume(
                     continuation,
-                    ServiceCallResult(result),
+                    result,
                 )
 ```
 
@@ -98,57 +98,25 @@ async def dispatch_effect(
 - **Deterministic** --- same input always produces the same output.
   No timing dependencies, no race conditions in core logic.
 
-## Import Rules
+## Layer Constraints
 
-Import boundaries are enforced at the package level.
-These are the hard rules:
+Each layer has a **behavioral** contract (what code may *do*) and a
+**structural** contract (what it may *import*).
+The behavioral rules are the fundamental ones --- the structural rules follow
+from them.
 
-| Module | May Import | Must NOT Import |
+| Layer | Behavioral Contract | Structural |
 | --- | --- | --- |
-| `hamster.mcp._core` | stdlib only | `asyncio`, `aiohttp`, `homeassistant`, `hamster.mcp._io` |
-| `hamster.mcp._io` | stdlib, `asyncio`, `aiohttp`, `hamster.mcp._core` | `homeassistant` |
-| `hamster.component` | stdlib, `asyncio`, `aiohttp`, `homeassistant`, `hamster.mcp` | (no restrictions) |
+| `hamster.mcp._core` | **No I/O, no global state.** Pure functions and data types only. | Must not import `_io` or `component`. |
+| `hamster.mcp._io` | **Async I/O adapter.** Bridges HTTP to the sans-IO core. | May import `_core`. Does not import `homeassistant` (HA-independent for testability). |
+| `hamster.component` | **HA integration.** No behavioral restrictions. | May import everything. |
 
-The key insight: `_core` is a pure Python library with no async and no
-framework dependencies.
-It can be tested, understood, and reused independently.
-
-## Dependencies Policy
-
-### Core Modules (sans-IO)
-
-**Allowed:**
-
-- Python standard library
-- Pure computation (no I/O, no async)
-
-**Forbidden:**
-
-- `asyncio` or any async runtime
-- `aiohttp`, `httpx`, or HTTP libraries
-- File system access
-- Network access
-- Anything from `homeassistant`
-
-### I/O Modules
-
-**Allowed:**
-
-- `asyncio`
-- `aiohttp`
-- `hamster.mcp._core`
-
-**Forbidden:**
-
-- `homeassistant` (the I/O adapter is HA-independent)
-
-### Component Modules
-
-**Allowed:**
-
-- Everything from core and I/O
-- `homeassistant` internals
-- HA's pinned dependencies (`voluptuous`, etc.)
+The key insight: `_core` is defined by what its code *does* (no I/O, no global
+state), not by what it *imports*.
+It may depend on any library --- stdlib or third-party --- as long as the core
+code itself remains pure.
+In practice it currently needs only the stdlib, but the constraint is
+behavioral, not a dependency whitelist.
 
 ## Dynamic Tool Discovery
 
@@ -167,7 +135,8 @@ Hamster generates them at runtime:
 
 The tool generation function itself is **pure** --- it takes service data in and
 returns tool definitions out.
-The I/O layer handles calling `async_services()` and wiring the results.
+The component layer handles calling `async_services()` and feeding the results
+to the `SessionManager` via `update_tools()`.
 
 ## Tristate Tool Control
 

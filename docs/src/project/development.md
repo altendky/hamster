@@ -12,7 +12,7 @@ Placeholder --- to be written during Phase 1 implementation.
 
 ```bash
 mise install
-pip install -e ".[dev,docs]"
+uv sync --extra dev
 pre-commit install
 ```
 
