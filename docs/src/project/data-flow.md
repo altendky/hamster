@@ -11,14 +11,15 @@ generation specifics see [Tool Generation](tool-generation.md).
 flowchart TB
     client["MCP Client<br/>(Claude, opencode, etc.)"]
     view["HomeAssistantView<br/>requires_auth = True<br/>HA validates bearer token"]
-    transport["AiohttpMCPTransport<br/>Validates headers, parses JSON,<br/>match/case on ReceiveResult,<br/>runs effect dispatch loop"]
-    manager["SessionManager (sans-IO)<br/>Routes to session by ID,<br/>validates JSON-RPC, holds tool cache,<br/>produces ReceiveResult"]
+    transport["AiohttpMCPTransport<br/>Extracts headers + body,<br/>builds IncomingRequest,<br/>match/case on ReceiveResult,<br/>runs effect dispatch loop"]
+    manager["SessionManager (sans-IO)<br/>Validates headers, parses JSON/JSON-RPC,<br/>routes by session ID,<br/>holds tool cache, builds responses"]
     effect["EffectHandler (component)<br/>execute_service_call()<br/>→ hass.services.async_call()"]
-    response["JSON-RPC response → HTTP response → MCP client"]
+    response["SendResponse → HTTP response → MCP client"]
 
     client -->|"HTTPS POST (JSON-RPC)<br/>Authorization: Bearer"| view
     view --> transport
-    transport --> manager
+    transport -->|"IncomingRequest"| manager
+    manager -->|"SendResponse / RunEffects"| transport
     transport -->|"ServiceCall effect"| effect
     effect --> transport
     transport --> response
@@ -54,17 +55,18 @@ sequenceDiagram
     participant Manager as SessionManager (sans-IO)
 
     Client->>Transport: POST /api/hamster<br/>initialize request (no session ID)
-    Note over Transport: Validate headers<br/>Parse JSON body
-    Transport->>Manager: receive_message(None, msg, now)
-    Note over Manager: No session ID → create new session<br/>via session_id_factory<br/>Validate JSON-RPC, transition → INITIALIZING
-    Manager-->>Transport: Initialized(session_id, response)
-    Note over Transport: Send pre-built JSON-RPC response<br/>+ Mcp-Session-Id header
+    Note over Transport: Read body bytes<br/>Build IncomingRequest
+    Transport->>Manager: receive_request(IncomingRequest, now)
+    Note over Manager: Validate headers, parse JSON,<br/>parse JSON-RPC<br/>No session ID → create new session<br/>via session_id_factory<br/>Transition → INITIALIZING
+    Manager-->>Transport: SendResponse(200, {Mcp-Session-Id: id}, body)
+    Note over Transport: Translate to HTTP response
     Transport-->>Client: HTTP 200<br/>Mcp-Session-Id: &lt;id&gt;
 
     Client->>Transport: POST /api/hamster<br/>notifications/initialized<br/>Mcp-Session-Id: &lt;id&gt;
-    Transport->>Manager: receive_message(&lt;id&gt;, msg, now)
-    Note over Manager: Look up session by ID<br/>Transition → ACTIVE
-    Manager-->>Transport: NotificationAcked()
+    Note over Transport: Build IncomingRequest
+    Transport->>Manager: receive_request(IncomingRequest, now)
+    Note over Manager: Validate, parse, look up session<br/>Transition → ACTIVE
+    Manager-->>Transport: SendResponse(202, {}, None)
     Transport-->>Client: HTTP 202 Accepted
 ```
 
@@ -83,21 +85,22 @@ sequenceDiagram
     participant Manager as SessionManager (sans-IO)
 
     Client->>Transport: POST /api/hamster<br/>tools/list<br/>Mcp-Session-Id: &lt;id&gt;
-    Note over Transport: Validate headers<br/>Parse JSON body
-    Transport->>Manager: receive_message(&lt;id&gt;, msg, now)
-    Note over Manager: Look up session by ID<br/>Validate state: ACTIVE<br/>Parse JSON-RPC<br/>Build response from cached tool list
-    Manager-->>Transport: ToolListResponse(response)
-    Note over Transport: Send pre-built JSON-RPC response
+    Note over Transport: Build IncomingRequest
+    Transport->>Manager: receive_request(IncomingRequest, now)
+    Note over Manager: Validate headers, parse JSON/JSON-RPC<br/>Look up session by ID<br/>Validate state: ACTIVE<br/>Build response from cached tool list
+    Manager-->>Transport: SendResponse(200, headers, body)
+    Note over Transport: Translate to HTTP response
     Transport-->>Client: HTTP 200<br/>{"result":{"tools":[...]}}
 ```
 
 ## Tool Call Flow (with Effect/Continuation)
 
 The core parses the tool name, calls `call_tool()`, and returns the first
-`ToolEffect` inside a `ToolCallStarted` result.
+`ToolEffect` inside a `RunEffects` result.
 The transport runs the effect dispatch loop, calling the `EffectHandler`
 for each I/O effect and `resume()` (a pure `_core` function) to advance
-to the next effect.
+to the next effect.  When effects complete, the transport calls back into
+the core to build the response.
 
 ```mermaid
 sequenceDiagram
@@ -107,16 +110,19 @@ sequenceDiagram
     participant Effect as EffectHandler (component)
 
     Client->>Transport: POST /api/hamster<br/>tools/call hamster_light__turn_on<br/>Mcp-Session-Id: &lt;id&gt;
-    Note over Transport: Validate headers<br/>Parse JSON body
-    Transport->>Manager: receive_message(&lt;id&gt;, msg, now)
-    Note over Manager: Look up session by ID<br/>Validate state: ACTIVE<br/>Parse JSON-RPC<br/>call_tool(name, args) → ServiceCall
-    Manager-->>Transport: ToolCallStarted(request_id, ServiceCall)
+    Note over Transport: Build IncomingRequest
+    Transport->>Manager: receive_request(IncomingRequest, now)
+    Note over Manager: Validate, parse, look up session<br/>call_tool(name, args) → ServiceCall
+    Manager-->>Transport: RunEffects(request_id, ServiceCall)
 
     Note over Transport: Effect dispatch loop
     Transport->>Effect: execute_service_call(domain, service, data)
     Note over Effect: hass.services.async_call(...)
     Effect-->>Transport: ServiceCallResult
-    Note over Transport: resume(continuation, result)<br/>→ Done(CallToolResult)<br/>Build JSON-RPC response via jsonrpc
+    Note over Transport: resume(continuation, result)<br/>→ Done(CallToolResult)
+    Transport->>Manager: build_effect_response(request_id, result)
+    Manager-->>Transport: SendResponse(200, headers, body)
+    Note over Transport: Translate to HTTP response
     Transport-->>Client: HTTP 200<br/>{"result":{"content":[...]}}
 ```
 
