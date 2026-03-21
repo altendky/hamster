@@ -77,8 +77,8 @@ omission.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `name` | `str` | e.g. `hamster_light__turn_on` |
-| `description` | `str` | From HA service schema |
+| `name` | `str` | e.g. `hamster_services_search` |
+| `description` | `str` | Tool description |
 | `input_schema` | `dict[str, object]` | JSON Schema object |
 
 **`CallToolResult`** --- frozen dataclass.
@@ -354,6 +354,7 @@ Union grows as new continuation types are added.
 | --- | --- |
 | `domain` | `str` |
 | `service` | `str` |
+| `target` | `dict[str, object] \| None` |
 | `data` | `dict[str, object]` |
 | `continuation` | `Continuation` |
 
@@ -420,89 +421,155 @@ then calls `manager.build_effect_response(request_id, result)` to get a
 
 ## Stage 4 --- `_core/tools.py`
 
-Tool generation from HA service schemas, `call_tool()`, and `resume()`.
+Meta-tool definitions, `ServiceIndex`, `call_tool()`, and `resume()`.
+Uses the "meta-tool" pattern (modeled after onshape-mcp): instead of
+generating one MCP tool per HA service, 4 fixed tools let the LLM
+discover and invoke any HA service dynamically (see D017).
 
-### Tool name utilities
-
-```python
-TOOL_PREFIX = "hamster_"
-DOMAIN_SERVICE_SEP = "__"
-
-def make_tool_name(domain: str, service: str) -> str: ...
-def parse_tool_name(name: str) -> tuple[str, str]: ...
-```
-
-`make_tool_name("light", "turn_on")` -> `"hamster_light__turn_on"`.
-`parse_tool_name` raises `ValueError` on invalid format.
-
-### ToolFilterConfig --- full tristate
+### Fixed tool definitions
 
 ```python
-@dataclass(frozen=True)
-class ToolFilterConfig:
-    enabled: frozenset[str] = frozenset()   # "domain.service" --- always include
-    disabled: frozenset[str] = frozenset()  # "domain.service" --- always exclude
-    # Everything else is DYNAMIC (the default)
+TOOLS: tuple[Tool, ...] = (...)   # 4 constant Tool objects
 ```
 
-### Selector-to-JSON-Schema mapping
-
-`_selector_to_json_schema(selector_type: str, config: dict) -> dict`
-
-| HA Selector | JSON Schema |
+| Tool name | Description |
 | --- | --- |
-| `boolean` | `{"type": "boolean"}` |
-| `text` | `{"type": "string"}` |
-| `number` | `{"type": "number", "minimum": ..., "maximum": ...}` |
-| `select` | `{"type": "string", "enum": [...]}` |
-| `entity` | `{"type": "string"}` |
-| `device` | `{"type": "string"}` |
-| `area` | `{"type": "string"}` |
-| `floor` | `{"type": "string"}` |
-| `label` | `{"type": "string"}` |
-| `color_temp` | `{"type": "number"}` |
-| `color_rgb` | `{"type": "array", "items": {"type": "integer"}, "minItems": 3, "maxItems": 3}` |
-| `time` | `{"type": "string"}` |
-| `date` | `{"type": "string"}` |
-| `datetime` | `{"type": "string"}` |
-| `object` | `{"type": "object"}` |
-| `template` | `{"type": "string"}` |
-| Unknown | `{}` (accept anything) |
+| `hamster_services_search` | Find HA services by keyword, optionally filtered by domain |
+| `hamster_services_explain` | Get full field/target/selector details for a specific service |
+| `hamster_services_call` | Invoke a service with separate target and data parameters |
+| `hamster_services_schema` | Describe what a selector type expects as input |
 
-### Target handling
+Input schemas:
 
-`_target_to_json_schema_properties(target: dict) -> dict`
+**`hamster_services_search`:**
 
-Target properties (`entity_id`, `device_id`, `area_id`) are merged into
-the tool's top-level `inputSchema` properties as array-of-string types:
-`{"type": "array", "items": {"type": "string"}}`.  HA accepts both
-single strings and arrays, but the schema always uses arrays for
-consistency and predictability (see Q009).
+| Property | Type | Required |
+| --- | --- | --- |
+| `query` | `string` | yes |
+| `domain` | `string` | no |
 
-### Tool generation
+**`hamster_services_explain`:**
+
+| Property | Type | Required |
+| --- | --- | --- |
+| `domain` | `string` | yes |
+| `service` | `string` | yes |
+
+**`hamster_services_call`:**
+
+| Property | Type | Required |
+| --- | --- | --- |
+| `domain` | `string` | yes |
+| `service` | `string` | yes |
+| `target` | `object` (keys: `entity_id`, `device_id`, `area_id`, `floor_id`, `label_id` --- each `array` of `string`) | no |
+| `data` | `object` | no |
+
+**`hamster_services_schema`:**
+
+| Property | Type | Required |
+| --- | --- | --- |
+| `selector_type` | `string` | yes |
+
+### ServiceIndex
+
+Searchable index of HA service descriptions.  Built from the output of
+`homeassistant.helpers.service.async_get_all_descriptions()`.
 
 ```python
-def services_to_mcp_tools(
-    services: dict[str, dict[str, dict[str, object]]],
-    config: ToolFilterConfig = ToolFilterConfig(),
-) -> tuple[Tool, ...]:
+class ServiceIndex:
+    def __init__(
+        self,
+        descriptions: dict[str, dict[str, object]],
+    ) -> None: ...
+
+    def search(
+        self,
+        query: str,
+        *,
+        domain: str | None = None,
+    ) -> str: ...
+
+    def explain(self, domain: str, service: str) -> str | None: ...
 ```
 
-For each domain/service: check config (skip if disabled), generate name,
-build `inputSchema` from fields + target, create `Tool`.
+**Constructor:** iterates the descriptions dict (keyed by domain, then
+service name).  Builds an internal list of entries with pre-computed
+search text (domain, service name, description, field names
+concatenated, lowercased).
+
+**`search()`:** case-insensitive substring matching against the
+pre-computed search text.  If `domain` is provided, only entries in that
+domain are searched.  Returns a formatted text summary of matching
+services (domain, service name, description, whether it has a target).
+Returns a "no results" message if nothing matches.
+
+**`explain()`:** looks up a single service by domain and service name.
+Returns the raw HA service description as formatted text: name,
+description, target config (if any), and all fields with their selectors
+as HA defines them (no translation).  Returns `None` if the service is
+not found.
+
+### Selector descriptions
+
+```python
+SELECTOR_DESCRIPTIONS: dict[str, str] = { ... }
+```
+
+Static mapping of selector type name to a human-readable description of
+the expected input format.  Used by `hamster_services_schema`.
+
+Examples:
+
+| Selector type | Description (summary) |
+| --- | --- |
+| `boolean` | `true` or `false` |
+| `text` | String value |
+| `number` | Numeric value; may have min/max/step constraints |
+| `select` | One of a fixed set of string options |
+| `duration` | Dict with optional keys: `days`, `hours`, `minutes`, `seconds`, `milliseconds` (all numbers) |
+| `color_rgb` | Array of 3 integers `[R, G, B]`, each 0--255 |
+| `entity` | Entity ID string (e.g. `light.living_room`) |
+| `target` | Dict with optional keys: `entity_id`, `device_id`, `area_id`, `floor_id`, `label_id` |
+| `location` | Dict with `latitude`, `longitude` (required), `radius` (optional) |
+| `object` | Arbitrary JSON object |
+| Unknown | Description noting the selector type is unrecognized |
+
+The full table covers all 40 registered HA selector types.
+
+```python
+def describe_selector(selector_type: str) -> str: ...
+```
+
+Looks up the selector type in `SELECTOR_DESCRIPTIONS`.  Returns the
+description string, or a fallback message for unknown types.
 
 ### Tool dispatch
 
 ```python
-def call_tool(name: str, arguments: dict[str, object]) -> ToolEffect:
+def call_tool(
+    name: str,
+    arguments: dict[str, object],
+    index: ServiceIndex,
+) -> ToolEffect:
 ```
 
-Parses tool name into domain/service, returns
-`ServiceCall(domain, service, data=arguments, continuation=FormatServiceResponse())`.
-All arguments (including target keys like `entity_id`) are passed as
-`data` without separation --- HA accepts target keys in `service_data`
-and extracts them internally (see Q009).
-Raises `ValueError` on unparsable names.
+Dispatches by tool name:
+
+- `hamster_services_search` --- calls `index.search()`, returns `Done`
+  with text result.
+- `hamster_services_explain` --- calls `index.explain()`, returns `Done`.
+  Returns error content if service not found.
+- `hamster_services_call` --- validates that the domain/service exists
+  in the index (see D017).  If not found, returns
+  `Done(CallToolResult(is_error=True))`.  If found, returns
+  `ServiceCall(domain, service, target, data, FormatServiceResponse())`.
+- `hamster_services_schema` --- calls `describe_selector()`, returns
+  `Done`.
+- Unknown name --- raises `ValueError`.
+
+Three of the four tools return `Done` immediately (pure computation).
+Only `hamster_services_call` produces a `ServiceCall` effect requiring
+I/O.
 
 ### Continuation
 
@@ -516,32 +583,51 @@ message and `is_error=True`.
 
 ### Tests --- `_tests/test_tools.py`
 
-**Tool names:**
+**Tool definitions:**
 
-- `make_tool_name` / `parse_tool_name` round-trip.
-- Invalid names raise `ValueError`.
+- `TOOLS` has exactly 4 entries.
+- Each tool has a non-empty `name`, `description`, and valid
+  `input_schema`.
+- Tool names match `[a-zA-Z0-9_-]{1,64}`.
 
-**Selectors:**
+**ServiceIndex construction:**
 
-- Each supported selector type produces correct JSON Schema.
-- `number` with min/max.
-- `select` with string options and `{"value": ..., "label": ...}` dicts.
-- `color_rgb` array constraints.
-- Unknown selector -> `{}`.
+- Empty descriptions dict -> empty index.
+- Single domain/service -> searchable.
+- Multiple domains -> all indexed.
 
-**Tool generation:**
+**`search()`:**
 
-- Single service -> single Tool.
-- Disabled services excluded.
-- Enabled services always included.
-- Service with target -> target properties as array-of-string in schema.
-- Required fields -> `required` array.
-- Empty registry -> empty tuple.
+- Keyword match on service name -> found.
+- Keyword match on description -> found.
+- Keyword match on field names -> found.
+- Case-insensitive matching.
+- Domain filter restricts results.
+- No match -> "no results" message.
+
+**`explain()`:**
+
+- Known service -> raw HA description with fields, selectors, target.
+- Unknown service -> `None`.
+- Service with sections (nested field groups) -> fields shown flattened.
+
+**Selector descriptions:**
+
+- Each known selector type returns a non-empty description.
+- Unknown selector -> fallback message.
 
 **`call_tool()`:**
 
-- Returns `ServiceCall` with correct fields.
-- Invalid name raises `ValueError`.
+- `hamster_services_search` -> `Done` with text content.
+- `hamster_services_explain` -> `Done` with text content.
+- `hamster_services_explain` for unknown service -> `Done` with
+  `is_error=True`.
+- `hamster_services_call` with valid service -> `ServiceCall` with
+  correct domain, service, target, data.
+- `hamster_services_call` with unknown service -> `Done` with
+  `is_error=True`.
+- `hamster_services_schema` -> `Done` with selector description.
+- Unknown tool name -> `ValueError`.
 
 **`resume()`:**
 
@@ -621,17 +707,14 @@ class MCPServerSession:
     def handle(
         self,
         message: JsonRpcRequest | JsonRpcNotification,
+        index: ServiceIndex,
     ) -> SessionResult: ...
-
-    def update_tools(self, tools: tuple[Tool, ...]) -> None: ...
 ```
 
 `handle()` is the single entry point.  The manager calls it after
-parsing and routing.  The session dispatches based on its current state
-and the message's method.
-
-`update_tools()` replaces the session's tool list.  Called by the
-manager when `SessionManager.update_tools()` propagates changes.
+parsing and routing, passing the current `ServiceIndex`.  The session
+dispatches based on its current state and the message's method.  For
+`tools/call`, the session passes the index through to `call_tool()`.
 
 #### State routing
 
@@ -645,8 +728,8 @@ manager when `SessionManager.update_tools()` propagates changes.
 | INITIALIZING | anything else | `SessionError` (`INVALID_REQUEST`) |
 | ACTIVE | `ping` | `SessionResponse` with `{"result": {}}` |
 | ACTIVE | `tools/list` | `SessionResponse` with tool list body |
-| ACTIVE | `tools/call` (valid tool) | `SessionToolCall` with effect |
-| ACTIVE | `tools/call` (unknown tool) | `SessionError` (`INVALID_PARAMS`) |
+| ACTIVE | `tools/call` (valid tool name) | `SessionToolCall` with effect (index passed to `call_tool()`) |
+| ACTIVE | `tools/call` (unknown tool name) | `SessionError` (`INVALID_PARAMS`) |
 | ACTIVE | any notification | `SessionAck` |
 | ACTIVE | unknown method request | `SessionError` (`METHOD_NOT_FOUND`) |
 | CLOSED | anything | `SessionError` (`INVALID_REQUEST`) |
@@ -686,7 +769,8 @@ factory.
 
 Sessions are stored internally as `dict[str, MCPServerSession]` keyed
 by session ID, with a parallel `dict[str, float]` for last-activity
-timestamps.
+timestamps.  The manager also holds a `ServiceIndex` (updated via
+`update_index()`) and the constant `TOOLS` tuple from `tools.py`.
 
 `SessionManager` is designed for single-event-loop concurrency.
 Multiple coroutines may call `receive_request()` concurrently (asyncio
@@ -705,11 +789,11 @@ on wakeup without interpreting it.
 
 | Method | Signature | Purpose |
 | --- | --- | --- |
-| `update_tools` | `(tools: tuple[Tool, ...]) -> None` | Replace tool cache, propagate to all sessions |
+| `update_index` | `(index: ServiceIndex) -> None` | Replace service index (tool list is constant; see D017) |
 | `receive_request` | `(request: IncomingRequest, now: float) -> ReceiveResult \| list[ReceiveResult]` | Full HTTP-to-protocol pipeline; returns list for batch requests |
 | `build_effect_response` | `(request_id: JsonRpcId, result: CallToolResult) -> SendResponse` | Build HTTP response after effect dispatch completes (session-independent) |
 | `notify_services_changed` | `(now: float) -> None` | Record that services changed; starts debounce timer |
-| `check_wakeups` | `(now: float) -> tuple[list[SessionExpired], bool, WakeupRequest \| None]` | Expire idle sessions, check tool regeneration debounce, compute next wakeup |
+| `check_wakeups` | `(now: float) -> tuple[list[SessionExpired], bool, WakeupRequest \| None]` | Expire idle sessions, check index regeneration debounce, compute next wakeup |
 | `handle_wakeup` | `(token: WakeupToken, now: float) -> None` | Core receives its own token back on wakeup (reserved for future use) |
 | `close_session` | `(session_id: str) -> bool` | Explicitly close a session |
 
@@ -761,15 +845,16 @@ it in response headers.
 
 - Expire sessions where `now - last_activity >= idle_timeout`.
 - Remove expired sessions from internal storage.
-- Check if tool regeneration debounce deadline has passed.
-- Return `(expired_list, should_regenerate_tools, next_wakeup)`.
+- Check if index regeneration debounce deadline has passed.
+- Return `(expired_list, should_regenerate_index, next_wakeup)`.
 - `next_wakeup` is `None` if no sessions and no pending debounce.
 
 The I/O layer sleeps until the `WakeupRequest.deadline`, then calls
-`check_wakeups()`.  When `should_regenerate_tools` is `True`, the
-component calls `async_services()`, generates tools, and calls
-`update_tools()`.  The generic `WakeupRequest` / `WakeupToken`
-mechanism allows future wakeup reasons without changing the I/O layer.
+`check_wakeups()`.  When `should_regenerate_index` is `True`, the
+component calls `async_get_all_descriptions()`, builds a new
+`ServiceIndex`, and calls `update_index()`.  The generic
+`WakeupRequest` / `WakeupToken` mechanism allows future wakeup reasons
+without changing the I/O layer.
 
 ### Tests --- `_tests/test_session.py`
 
@@ -833,10 +918,10 @@ no mocks.  The entire protocol is testable with plain data.
 - Unknown session ID -> `SendResponse(404)`.
 - Multiple independent sessions operate without interference.
 
-**Tool management:**
+**Index and tool management:**
 
-- `update_tools()` propagates to existing sessions.
-- New sessions get current tool list.
+- `update_index()` replaces the service index.
+- `tools/list` always returns the 4 fixed tools from `TOOLS`.
 - Unknown tool name -> error response with `INVALID_PARAMS`.
 
 **Effect response:**
@@ -853,7 +938,7 @@ no mocks.  The entire protocol is testable with plain data.
 - Past timeout -> `SessionExpired`, session removed.
 - Activity push-back resets timeout.
 - Multiple sessions -> correct next wakeup.
-- `notify_services_changed()` -> `should_regenerate_tools` becomes
+- `notify_services_changed()` -> `should_regenerate_index` becomes
   `True` after debounce delay.
 - Rapid successive `notify_services_changed()` calls -> debounce resets,
   only one regeneration.
@@ -891,7 +976,11 @@ sans-IO core (Stage 5).
 ```python
 class EffectHandler(Protocol):
     async def execute_service_call(
-        self, domain: str, service: str, data: dict[str, object],
+        self,
+        domain: str,
+        service: str,
+        target: dict[str, object] | None,
+        data: dict[str, object],
     ) -> ServiceCallResult: ...
 ```
 
@@ -954,10 +1043,10 @@ async def _run_effects(self, effect: ToolEffect) -> CallToolResult:
         match current:
             case Done(result=result):
                 return result
-            case ServiceCall(domain=d, service=s, data=data,
-                           continuation=cont):
+            case ServiceCall(domain=d, service=s, target=t,
+                           data=data, continuation=cont):
                 io_result = await self._effect_handler.execute_service_call(
-                    d, s, data)
+                    d, s, t, data)
                 current = resume(cont, io_result)
 ```
 
@@ -968,8 +1057,8 @@ Single background `asyncio.Task` that manages all timed events.
 - Calls `manager.check_wakeups(now)` to get expired sessions,
   tool-regeneration flag, and next `WakeupRequest`.
 - For each `SessionExpired`: logs and cleans up.
-- If `should_regenerate_tools`: calls back to the component to
-  regenerate (via a callback passed at construction).
+- If `should_regenerate_index`: calls back to the component to
+  rebuild the service index (via a callback passed at construction).
 - If `WakeupRequest` is `None`: waits on `asyncio.Event` (no sessions,
   no pending debounce).
 - Otherwise: sleeps until `wakeup.deadline`.
@@ -1002,8 +1091,8 @@ effect dispatch.
   response, not an opaque 500.
 - Loaded flag: requests after `shutdown()` -> 503.
 - Wakeup loop: sleeps, wakes on new session, wakes on
-  `notify_activity()`, expires idle sessions, triggers tool
-  regeneration callback after debounce.
+  `notify_activity()`, expires idle sessions, triggers index
+  rebuild callback after debounce.
 
 ---
 
@@ -1062,10 +1151,11 @@ service registry, and event bus.
 **`HamsterEffectHandler`** --- implements `EffectHandler`:
 
 ```python
-async def execute_service_call(self, domain, service, data):
+async def execute_service_call(self, domain, service, target, data):
     try:
         result = await self._hass.services.async_call(
             domain, service, data,
+            target=target,
             blocking=True, return_response=True)
         return ServiceCallResult(success=True, data=result or None)
     except ServiceNotFound:
@@ -1122,10 +1212,9 @@ the `AiohttpMCPTransport` instance.
    `AiohttpMCPTransport(manager, effect_handler)`.
 3. Register `HamsterMCPView(transport)` via
    `hass.http.register_view()`.
-4. Generate initial tool list from `hass.services.async_services()`
-   using default `ToolFilterConfig()` (all services dynamic; tristate
-   config is wired up when the options flow lands per Q005).
-   Call `manager.update_tools(services_to_mcp_tools(services))`.
+4. Build initial service index from
+   `async_get_all_descriptions(hass)` (see D017).  Call
+   `manager.update_index(ServiceIndex(descriptions))`.
 5. Listen for `EVENT_SERVICE_REGISTERED` / `EVENT_SERVICE_REMOVED`.
    On each event, call `manager.notify_services_changed(now)`.  The
    wakeup loop handles debouncing and triggers regeneration via a
@@ -1133,9 +1222,9 @@ the `AiohttpMCPTransport` instance.
    `entry.async_on_unload()`.
 6. Start wakeup loop as background task via
    `entry.async_create_background_task()`.  The loop calls
-   `manager.check_wakeups()` and invokes a tool-regeneration callback
-   (which calls `async_services()` + `services_to_mcp_tools()` +
-   `manager.update_tools()`).
+   `manager.check_wakeups()` and invokes an index-rebuild callback
+   (which calls `async_get_all_descriptions()` +
+   `ServiceIndex(descriptions)` + `manager.update_index()`).
 7. Store `manager`, `transport`, and the background task in
    `hass.data[DOMAIN][entry.entry_id]`.
 
@@ -1154,9 +1243,10 @@ the `AiohttpMCPTransport` instance.
 
 - `async_setup_entry` succeeds.
 - Endpoint reachable after setup.
-- Tool list reflects registered services.
+- Tool list returns the 4 fixed tools.
+- Service index built from descriptions.
 - `async_unload_entry` succeeds.
-- Service events trigger tool list refresh.
+- Service events trigger index rebuild.
 
 **`test_http.py`:**
 
