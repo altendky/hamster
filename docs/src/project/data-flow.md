@@ -12,7 +12,7 @@ flowchart TB
     client["MCP Client<br/>(Claude, opencode, etc.)"]
     view["HomeAssistantView<br/>requires_auth = True<br/>HA validates bearer token"]
     transport["AiohttpMCPTransport<br/>Extracts headers + body,<br/>builds IncomingRequest,<br/>match/case on ReceiveResult,<br/>runs effect dispatch loop"]
-    manager["SessionManager (sans-IO)<br/>Validates headers, parses JSON/JSON-RPC,<br/>routes by session ID,<br/>holds tool cache, builds responses"]
+    manager["SessionManager (sans-IO)<br/>Validates headers, parses JSON/JSON-RPC,<br/>routes by session ID,<br/>holds service index, builds responses"]
     effect["EffectHandler (component)<br/>execute_service_call()<br/>→ hass.services.async_call()"]
     response["SendResponse → HTTP response → MCP client"]
 
@@ -72,11 +72,10 @@ sequenceDiagram
 
 ## Tool List Flow
 
-The tool list is generated once at integration load time and cached in the
-`SessionManager`.
-It is regenerated when `EVENT_SERVICE_REGISTERED` or `EVENT_SERVICE_REMOVED`
-fires (the component calls `manager.update_tools()`).
-The core builds the complete JSON-RPC response --- no handler call needed.
+The tool list is constant --- 4 fixed meta-tools defined in
+`hamster.mcp._core.tools.TOOLS`.  The `SessionManager` always returns the
+same list.  No regeneration is needed when services change (only the
+`ServiceIndex` is rebuilt).
 
 ```mermaid
 sequenceDiagram
@@ -87,20 +86,40 @@ sequenceDiagram
     Client->>Transport: POST /api/hamster<br/>tools/list<br/>Mcp-Session-Id: &lt;id&gt;
     Note over Transport: Build IncomingRequest
     Transport->>Manager: receive_request(IncomingRequest, now)
-    Note over Manager: Validate headers, parse JSON/JSON-RPC<br/>Look up session by ID<br/>Validate state: ACTIVE<br/>Build response from cached tool list
+    Note over Manager: Validate headers, parse JSON/JSON-RPC<br/>Look up session by ID<br/>Validate state: ACTIVE<br/>Build response from constant TOOLS
     Manager-->>Transport: SendResponse(200, headers, body)
     Note over Transport: Translate to HTTP response
-    Transport-->>Client: HTTP 200<br/>{"result":{"tools":[...]}}
+    Transport-->>Client: HTTP 200<br/>{"result":{"tools":[4 meta-tools]}}
 ```
 
 ## Tool Call Flow (with Effect/Continuation)
 
-The core parses the tool name, calls `call_tool()`, and returns the first
-`ToolEffect` inside a `RunEffects` result.
-The transport runs the effect dispatch loop, calling the `EffectHandler`
-for each I/O effect and `resume()` (a pure `_core` function) to advance
-to the next effect.  When effects complete, the transport calls back into
-the core to build the response.
+The core dispatches by tool name via `call_tool()`.  For the three
+pure tools (`search`, `explain`, `schema`), `call_tool()` returns
+`Done` immediately --- no I/O needed.  For `hamster_services_call`,
+it returns a `ServiceCall` effect that the transport executes.
+
+### Pure tools (search, explain, schema)
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Transport as AiohttpMCPTransport
+    participant Manager as SessionManager (sans-IO)
+
+    Client->>Transport: POST /api/hamster<br/>tools/call hamster_services_search<br/>Mcp-Session-Id: &lt;id&gt;
+    Note over Transport: Build IncomingRequest
+    Transport->>Manager: receive_request(IncomingRequest, now)
+    Note over Manager: Validate, parse, look up session<br/>call_tool(name, args, index)<br/>→ Done(CallToolResult)
+    Manager-->>Transport: RunEffects(request_id, Done)
+
+    Note over Transport: Effect dispatch loop<br/>Done → return result immediately
+    Transport->>Manager: build_effect_response(request_id, result)
+    Manager-->>Transport: SendResponse(200, headers, body)
+    Transport-->>Client: HTTP 200<br/>{"result":{"content":[{"type":"text","text":"..."}]}}
+```
+
+### Service call tool
 
 ```mermaid
 sequenceDiagram
@@ -109,14 +128,14 @@ sequenceDiagram
     participant Manager as SessionManager (sans-IO)
     participant Effect as EffectHandler (component)
 
-    Client->>Transport: POST /api/hamster<br/>tools/call hamster_light__turn_on<br/>Mcp-Session-Id: &lt;id&gt;
+    Client->>Transport: POST /api/hamster<br/>tools/call hamster_services_call<br/>Mcp-Session-Id: &lt;id&gt;
     Note over Transport: Build IncomingRequest
     Transport->>Manager: receive_request(IncomingRequest, now)
-    Note over Manager: Validate, parse, look up session<br/>call_tool(name, args) → ServiceCall
+    Note over Manager: Validate, parse, look up session<br/>call_tool(name, args, index)<br/>→ ServiceCall(domain, service, target, data)
     Manager-->>Transport: RunEffects(request_id, ServiceCall)
 
     Note over Transport: Effect dispatch loop
-    Transport->>Effect: execute_service_call(domain, service, data)
+    Transport->>Effect: execute_service_call(domain, service, target, data)
     Note over Effect: hass.services.async_call(...)
     Effect-->>Transport: ServiceCallResult
     Note over Transport: resume(continuation, result)<br/>→ Done(CallToolResult)
@@ -126,29 +145,29 @@ sequenceDiagram
     Transport-->>Client: HTTP 200<br/>{"result":{"content":[...]}}
 ```
 
-## Tool Generation (Pure Function)
+## Service Index (Pure Construction)
 
-The `services_to_mcp_tools()` function lives in `hamster.mcp._core.tools` ---
-it is pure (no I/O, no global state).
-The component layer calls `hass.services.async_services()` and feeds the
-result in, then updates the `SessionManager`'s cache:
+The `ServiceIndex` class lives in `hamster.mcp._core.tools` --- its
+constructor is pure (no I/O, no global state).  The component layer
+calls `async_get_all_descriptions(hass)` and feeds the result in, then
+updates the `SessionManager`'s index:
 
 ```python
 # In component — on startup and on EVENT_SERVICE_REGISTERED/REMOVED
-services = await hass.services.async_services()
-tools = services_to_mcp_tools(services, tristate_config)
-manager.update_tools(tools)
+descriptions = await async_get_all_descriptions(hass)
+index = ServiceIndex(descriptions)
+manager.update_index(index)
 ```
 
 ```mermaid
 flowchart LR
-    input["HA service registry<br/>{light: {turn_on: {fields: {brightness: {selector: {number: {min: 0, max: 255}}}}}}}"]
-    fn["services_to_mcp_tools()<br/><i>pure function</i>"]
-    output["MCP tool definitions<br/>[{name: hamster_light__turn_on, inputSchema: {properties: {brightness: {type: number, minimum: 0, maximum: 255}}}}]"]
-    cache["manager.update_tools()"]
+    input["HA service descriptions<br/>(from async_get_all_descriptions)"]
+    fn["ServiceIndex()<br/><i>pure constructor</i>"]
+    output["Searchable index<br/>with pre-computed search text"]
+    cache["manager.update_index()"]
 
     input --> fn --> output --> cache
 ```
 
-The tristate configuration is also passed in as data --- the function filters
-based on Enabled/Dynamic/Disabled state per service.
+The tool list itself is constant --- `TOOLS` is a tuple of 4 fixed `Tool`
+definitions that never changes.

@@ -3,19 +3,21 @@
 A Home Assistant custom component that exposes HA's full capabilities via the
 Model Context Protocol (MCP).
 The project emphasizes testability through sans-IO design principles and
-runtime dynamic tool generation.
+a meta-tool API gateway pattern.
 
 ## What Makes Hamster Different
 
 Every existing HA MCP project defines tools statically in code.
-Hamster generates them at runtime from `hass.services.async_services()`, which
-returns service schemas including field definitions, descriptions, and required
-parameters.
-No existing project does this.
+Hamster uses a **meta-tool pattern** --- 4 fixed MCP tools
+(`search`, `explain`, `call`, `schema`) that let the LLM dynamically
+discover and invoke any HA service.  Service metadata is sourced from
+`async_get_all_descriptions()`, which returns field definitions, selectors,
+and target configuration.
+No existing project uses this approach.
 
 Running as a custom component inside HA gives direct access to:
 
-- Service schemas with field definitions (not available via REST API)
+- Service descriptions with field definitions (not available via REST API)
 - Built-in HA authentication (`requires_auth=True` on `HomeAssistantView`)
 - Entity, device, and area registries
 - Exposure settings (`async_should_expose()`)
@@ -32,8 +34,8 @@ Running as a custom component inside HA gives direct access to:
 ### Features
 
 - [MCP Protocol](mcp-protocol.md) --- Streamable HTTP transport, JSON-RPC, session lifecycle
-- [Tool Generation](tool-generation.md) --- Dynamic tools from HA service schemas
-- [Tristate Control](tristate-control.md) --- Enabled/Dynamic/Disabled service model
+- [Tool Generation](tool-generation.md) --- Meta-tool pattern, ServiceIndex, selector descriptions
+- [Tristate Control](tristate-control.md) --- Enabled/Dynamic/Disabled service model (deferred)
 - [Configuration](configuration.md) --- Config flow, options flow
 
 ### Infrastructure

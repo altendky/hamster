@@ -118,35 +118,38 @@ code itself remains pure.
 In practice it currently needs only the stdlib, but the constraint is
 behavioral, not a dependency whitelist.
 
-## Dynamic Tool Discovery
+## Meta-Tool API Gateway
 
 Every existing HA MCP project defines tools statically.
-Hamster generates them at runtime:
+Hamster uses a **meta-tool pattern** (see D017):
 
-1. Call `hass.services.async_services()` --- returns all domains, services, and
-   field schemas
-2. For each service, generate an MCP tool definition with:
-   - Name derived from domain + service
-   - Description from the service schema
-   - Input schema from field definitions (selectors to JSON Schema)
-3. Apply tristate filtering (Enabled/Dynamic/Disabled)
-4. Serve dynamically on `tools/list`
-5. On `tools/call`, dispatch to `hass.services.async_call()`
+1. Call `async_get_all_descriptions()` --- returns all services with field
+   definitions, selectors, and target configuration
+2. Build a `ServiceIndex` (pure construction, no I/O)
+3. Expose 4 fixed MCP tools: `search`, `explain`, `call`, `schema`
+4. The LLM discovers services via `search`, reads their details via
+   `explain`, and invokes them via `call`
+5. `call` dispatches to `hass.services.async_call()` with separate
+   `target` and `data` parameters
 
-The tool generation function itself is **pure** --- it takes service data in and
-returns tool definitions out.
-The component layer handles calling `async_services()` and feeding the results
-to the `SessionManager` via `update_tools()`.
+The `ServiceIndex` constructor is **pure** --- it takes description data in
+and returns an indexed, searchable structure out.
+The component layer handles calling `async_get_all_descriptions()` and
+feeding the results to the `SessionManager` via `update_index()`.
 
-## Tristate Tool Control
+## Tristate Tool Control (Deferred)
 
-Each service has three states:
+Per-service filtering is deferred.  With 4 fixed meta-tools, there is no
+per-service tool list to filter.  A future addition could restrict which
+services the LLM can discover or invoke via the `ServiceIndex`.
+
+Previously planned states:
 
 | State | Behavior |
 | --- | --- |
-| **Enabled** | Always exposed as an MCP tool |
-| **Dynamic** | Exposed based on runtime discovery (the default) |
-| **Disabled** | Never exposed |
+| **Enabled** | Always discoverable |
+| **Dynamic** | Discoverable based on runtime state (the default) |
+| **Disabled** | Hidden from search/explain, rejected by call |
 
 This allows users to:
 

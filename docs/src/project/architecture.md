@@ -15,7 +15,7 @@ block-beta
         i1["hamster.mcp._io<br/>aiohttp Streamable HTTP transport adapter"]
     end
     block:core["Core Layer"]
-        c1["hamster.mcp._core<br/>sans-IO MCP protocol + tool generation<br/>No I/O — no global state"]
+        c1["hamster.mcp._core<br/>sans-IO MCP protocol + meta-tool dispatch<br/>No I/O — no global state"]
     end
 
     d1 --> a1
@@ -40,7 +40,7 @@ hamster/
 │       │   │   ├── events.py             # Protocol events + tool effect/continuation types
 │       │   │   ├── session.py            # SessionManager + MCPServerSession
 │       │   │   ├── jsonrpc.py            # JSON-RPC 2.0 parsing/building
-│       │   │   ├── tools.py              # Tool generation, call_tool(), resume()
+│       │   │   ├── tools.py              # Meta-tools, ServiceIndex, call_tool(), resume()
 │       │   │   └── types.py              # MCP data types (Tool, Content, etc.)
 │       │   ├── _io/                      # I/O adapters
 │       │   │   ├── __init__.py
@@ -84,7 +84,7 @@ hamster/
 | `hamster.mcp._core.jsonrpc` | Core | JSON-RPC 2.0 message parsing and response building |
 | `hamster.mcp._core.events` | Core | `ReceiveResult` types (`SendResponse`, `RunEffects`) and tool effect/continuation types (`Done`, `ServiceCall`, `FormatServiceResponse`) |
 | `hamster.mcp._core.session` | Core | `SessionManager` --- HTTP-to-protocol pipeline; validates headers, parses JSON/JSON-RPC, routes by session ID, creates sessions via injected `session_id_factory`, tracks timeouts, builds responses. `MCPServerSession` --- per-session sans-IO state machine. |
-| `hamster.mcp._core.tools` | Core | Pure tool generation (`services_to_mcp_tools`), `call_tool()`, `resume()` |
+| `hamster.mcp._core.tools` | Core | 4 fixed meta-tool definitions (`TOOLS`), `ServiceIndex`, `call_tool()`, `resume()`, selector descriptions |
 | `hamster.mcp._io.aiohttp` | Integration | `AiohttpMCPTransport` --- thin adapter; extracts headers/body from aiohttp, delegates to `SessionManager`, runs effect dispatch loop. Timeout wakeup loop. `EffectHandler` protocol definition. |
 | `hamster.component` | Application | HA integration entry point (`async_setup_entry`, `async_unload_entry`) |
 | `hamster.component.config_flow` | Application | Config flow (setup) + options flow (tristate control) |
@@ -158,7 +158,7 @@ flowchart TB
     end
 
     subgraph core["hamster.mcp._core"]
-        manager["SessionManager\n(HTTP→protocol pipeline,\nvalidation, parsing, routing,\ntool cache, timeouts)"]
+        manager["SessionManager\n(HTTP→protocol pipeline,\nvalidation, parsing, routing,\nservice index, timeouts)"]
         session["MCPServerSession\n(per-session state machine)"]
     end
 
@@ -174,7 +174,11 @@ Defined in `hamster.mcp._io`, implemented by `hamster.component`:
 ```python
 class EffectHandler(Protocol):
     async def execute_service_call(
-        self, domain: str, service: str, data: dict[str, object],
+        self,
+        domain: str,
+        service: str,
+        target: dict[str, object] | None,
+        data: dict[str, object],
     ) -> ServiceCallResult: ...
 ```
 
@@ -194,10 +198,10 @@ class EffectHandler(Protocol):
 | Session state machine | MCPServerSession | `_core` |
 | Session routing + creation | SessionManager | `_core` |
 | Session timeout tracking | SessionManager | `_core` |
-| Tool list caching + responses | SessionManager | `_core` |
+| Tool list (constant) + service index | SessionManager | `_core` |
 | `call_tool()` / `resume()` | `_core.tools` | `_core` |
 | HA service call execution | **EffectHandler** | `component` |
-| Tool list generation trigger | Component | `component` |
+| Service index rebuild trigger | Component | `component` |
 
 ### Error Handling Layers
 
@@ -233,11 +237,11 @@ loads the custom component it automatically pip-installs the library.
 
 The decision to build as a custom component (not an external server or add-on)
 was driven by one critical capability: only code running inside HA can access
-`hass.services.async_services()`, which returns service schemas with field
-definitions.
+`async_get_all_descriptions()`, which returns service descriptions with field
+definitions, selectors, and target configuration.
 
 The external REST API (`/api/services`) lists services but does **not** include
-schemas.
+field schemas.
 The WebSocket API may include some schema info but is less complete.
 
 Additional benefits:
@@ -262,8 +266,8 @@ Trade-offs accepted:
 | `ha-mcp` (community) | Standalone/add-on | 95+ | Static | Token |
 | `hass-mcp-server` (ganhammar) | Custom component | 21 | Static | OAuth |
 | `mcp-assist` | Custom component | 11 | Index pattern | IP whitelist |
-| **Hamster** | Custom component | All HA services | **Dynamic from schemas** | HA built-in |
+| **Hamster** | Custom component | 4 meta-tools | **Dynamic discovery from descriptions** | HA built-in |
 
-Hamster's unique position: dynamic tool generation from service schemas, built-in
-HA auth, full admin access, tristate tool control.
-No existing project combines all of these.
+Hamster's unique position: meta-tool API gateway pattern (search/explain/call/schema)
+giving access to all HA services via 4 fixed tools, built-in HA auth, full admin
+access.  No existing project uses this approach.

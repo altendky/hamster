@@ -21,17 +21,13 @@ support is included in the implementation plan (Stage 2 and Stage 5).
 
 Moved to [Decisions](decisions.md) as D015.
 
-## Q005: Options Flow UX for Tristate Control
+## ~~Q005: Options Flow UX for Tristate Control~~ --- DEFERRED
 
-**Question:** How should the options flow present hundreds of HA services for
-enable/disable control?
-
-**Context:** A typical HA instance has 200+ services.
-Showing all of them in a single form is unusable.
-Options: group by domain, search/filter, only show non-default (overridden)
-services, multi-step flow.
-
-**No strong leaning yet.**
+Deferred.  With the meta-tool pattern (D017), there are no per-service tools
+to enable/disable.  All HA services are accessible through the 4 fixed
+meta-tools.  Per-service filtering via an options flow may be revisited as a
+future addition if there's a need to restrict which services the LLM can
+discover or invoke.
 
 ## ~~Q006: HA Service Call Error Mapping~~ --- RESOLVED
 
@@ -49,27 +45,13 @@ Moved to [Decisions](decisions.md) as D013.
 
 Moved to [Decisions](decisions.md) as D014.
 
-## Q009: Schema Fidelity vs. LLM Clarity
+## ~~Q009: Schema Fidelity vs. LLM Clarity~~ --- RESOLVED
 
-**Question:** Should MCP tool schemas transparently mirror HA's native service
-interface, or reshape it for LLM clarity?
-
-**Context:** Two current cases where the schema diverges from HA's raw API:
-
-- **Target properties** (`entity_id`, `device_id`, `area_id`): HA accepts both
-  single strings and arrays of strings.  The MCP schema uses array-only
-  (`{"type": "array", "items": {"type": "string"}}`) for consistency and
-  predictability.
-- **Target/data separation:** HA's `async_call` has a separate `target` parameter,
-  but the MCP schema presents a flat property list.  All arguments are passed as
-  `service_data` (HA extracts target keys internally).
-
-Both choices prioritize a clear, predictable schema for the LLM over transparent
-passthrough of HA's API.  This may need revisiting if edge cases emerge where the
-reshaping causes problems (e.g., services that interpret target keys differently,
-or LLMs that struggle with always-array semantics for single-entity calls).
-
-**Leaning toward:** Keep the current reshaping.  Revisit if real problems surface.
+Resolved by the meta-tool pattern (D017, D018, D019).  With meta-tools, there
+are no per-service JSON Schemas to reshape.  `explain` shows raw HA
+descriptions as-is (D018).  `call` separates target and data to match HA's
+`async_call` signature (D019).  The LLM sees HA's native format and uses
+`schema` to understand selector types when needed.
 
 ## Q010: Origin Header Validation Strategy
 
