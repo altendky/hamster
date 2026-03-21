@@ -55,7 +55,7 @@ def call_tool(name: str, arguments: dict[str, object]) -> ToolEffect:
 
 def resume(
     continuation: Continuation,
-    io_result: IoResult,
+    io_result: ServiceCallResult,
 ) -> ToolEffect:
     """Pure dispatch: continuation + I/O result -> next effect."""
     ...

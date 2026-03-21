@@ -1,0 +1,5 @@
+[config]
+model = "anthropic/claude-opus-4-6"
+model_turbo = "anthropic/claude-opus-4-6"
+fallback_models = ["anthropic/claude-opus-4-6"]
+custom_model_max_tokens = 200000
