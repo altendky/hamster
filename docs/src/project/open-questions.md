@@ -53,6 +53,28 @@ descriptions as-is (D018).  `call` separates target and data to match HA's
 `async_call` signature (D019).  The LLM sees HA's native format and uses
 `schema` to understand selector types when needed.
 
+## ~~Q017: `call_tool()` Error Mechanism for Unknown Tool Name~~ --- RESOLVED
+
+Moved to [Decisions](decisions.md) as D020 (part of the `call_tool()` contract
+change).
+
+Return `Done(CallToolResult(is_error=True))` for unknown tool names instead of
+raising `ValueError`.  `call_tool()` already uses this pattern for "service not
+found in index."  Since the service index can change between the session's
+tool-name validation and `call_tool()` execution, unknown-name is a data
+condition, not a violated invariant.  The function's contract becomes "returns
+`ToolEffect` for all inputs" with no exception paths.  The session still
+validates tool names first to produce a proper `INVALID_PARAMS` JSON-RPC error,
+but `call_tool()` handles it gracefully either way.
+
+## ~~Q018: `ServerCapabilities` Type Structure~~ --- RESOLVED
+
+Moved to [Decisions](decisions.md) as D020.
+
+## ~~Q019: Logging Strategy~~ --- RESOLVED
+
+Moved to [Decisions](decisions.md) as D021.
+
 ## Q010: Origin Header Validation Strategy
 
 **Question:** How should the server validate the `Origin` header to prevent
@@ -174,3 +196,52 @@ incomplete --- the implementation should include a comment noting this.
 
 **Leaning toward:** Defer both.  Add `AudioContent` when a use case
 emerges.  `EmbeddedResource` deferred longer.
+
+## Q015: Content-Type Parameter Stripping Responsibility
+
+**Question:** Should the sans-IO core defensively strip Content-Type
+parameters (e.g. `; charset=utf-8`), or trust the transport to normalize
+the header before building `IncomingRequest`?
+
+**Context:** Stage 5 says the core ignores Content-Type parameters ---
+only the media type portion is checked.  Stage 6 notes that aiohttp's
+`request.content_type` already strips parameters before the core sees
+them.  This means the core's parameter-stripping logic is dead code in
+production (aiohttp never passes parameters through), but it is
+exercised in Stage 5's pure tests which construct `IncomingRequest`
+values directly.
+
+Options:
+
+1. Core strips parameters defensively (defense-in-depth, testable in
+   isolation, correct if a different transport doesn't strip).
+2. Core requires pre-normalized media type (simpler core, transport
+   contract is explicit).
+
+**Leaning toward:** Option 1 --- core strips defensively.  The cost is
+negligible and it avoids a hidden contract between transport and core.
+
+## Q016: Batch Request Containing `initialize` --- Error Format
+
+**Question:** When an `initialize` message appears inside a JSON-RPC
+batch array, what is the exact error response?
+
+**Context:** Stage 5 says "`initialize` MUST NOT appear in a batch" and
+the test says `SendResponse(400)`.  But there are multiple possible
+behaviors:
+
+1. Reject the entire batch with HTTP 400 before processing any messages.
+2. Process other messages normally and return a per-item JSON-RPC error
+   for the `initialize` message.
+3. Return a single JSON-RPC error response (not an array) for the whole
+   batch.
+
+Session creation mid-batch creates ambiguity: subsequent messages in the
+same batch would lack a session ID context.  Option 2 would require
+processing other messages either with no session or with the
+newly-created session, both of which are problematic.
+
+**Leaning toward:** Option 1 --- reject the entire batch with HTTP 400
+and a JSON-RPC `INVALID_REQUEST` error body.  This is the simplest
+behavior and avoids ambiguity about session state for other messages in
+the batch.

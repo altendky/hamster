@@ -286,3 +286,78 @@ properties vs. field values.
 **Alternative considered:** Flat dict mixing target and field data (HA can
 extract target keys from `service_data` internally).  Rejected because the
 separation is clearer for LLM comprehension and matches the upstream API.
+
+## D020: `ToolsCapability` Dataclass and `call_tool()` Return Contract
+
+**Decision (capabilities):** Model `ServerCapabilities.tools` as
+`ToolsCapability | None` instead of `bool`.
+
+```python
+@dataclass(frozen=True)
+class ToolsCapability:
+    list_changed: bool = False
+
+@dataclass(frozen=True)
+class ServerCapabilities:
+    tools: ToolsCapability | None = field(
+        default_factory=ToolsCapability,
+    )
+```
+
+Serialization:
+
+- `ToolsCapability(list_changed=False)` → `{"tools": {}}`.
+- `ToolsCapability(list_changed=True)` → `{"tools": {"listChanged": true}}`.
+- `None` → `{}` (tools not supported).
+
+**Rationale:** Trivial extra work now, avoids a breaking change when SSE
+support lands (Q012) and `listChanged` needs to be advertised.  Honestly
+represents the MCP protocol's capability structure.
+
+**Decision (`call_tool()`):** `call_tool()` returns
+`Done(CallToolResult(is_error=True))` for unknown tool names instead of
+raising `ValueError`.
+
+**Rationale:** `call_tool()` already returns `Done(is_error=True)` for
+"service not found in index" --- a similar "not found" condition.  The
+service index can change between the session's tool-name validation and
+`call_tool()` execution, so unknown-name is a data condition, not a
+violated invariant.  The function's contract becomes "returns `ToolEffect`
+for all inputs" with no exception paths.
+
+The session still validates tool names before dispatching and returns
+`INVALID_PARAMS` at the JSON-RPC level --- that check remains as a
+protocol courtesy.  `call_tool()` handles the case gracefully either way.
+
+**Alternatives considered:**
+
+- `ValueError` for unknown tool name (original plan).  Rejected because
+  the race between index updates and request handling means "unknown" is
+  a runtime data condition, not a programming error.
+- Dedicated `ToolNotFound` effect type.  Rejected as unnecessary ceremony
+  for a case that should rarely occur.
+
+## D021: Logging Guidance
+
+**Decision:** Level-based logging guidance with a read/write tool split.
+Not prescriptive log-point specs --- implementation guidance only.
+
+| Level | What |
+| --- | --- |
+| **DEBUG** | Read-only tool calls (`search`, `explain`, `schema` --- arguments and results), individual request handling, effect dispatch details |
+| **INFO** | Session created, session expired, index rebuilt (with service count), `hamster_services_call` invocations (domain, service, target summary) |
+| **WARNING** | Client errors (bad headers, unknown session ID, rejected requests) |
+| **ERROR** | Unexpected failures only (`HamsterEffectHandler` catch-all) |
+
+**Rationale:** `hamster_services_call` mutates state (turns on lights,
+opens locks), so operators need default-level visibility into what the LLM
+is doing.  Read-only discovery tools (`search`, `explain`, `schema`) are
+DEBUG to avoid noise in production.
+
+Formal log-point specs are too rigid and drift from implementation.
+Pure implementer discretion risks inconsistency.  Level-based guidance
+strikes the balance.
+
+**Alternative considered:** Logging all tool calls at INFO.  Rejected
+because the LLM typically makes several `search`/`explain` round-trips
+per user request, which would be noisy at the default level.

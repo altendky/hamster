@@ -47,6 +47,15 @@ The client must initialize before any other operation:
 | `tools/list` | Client → Server | List available tools (paginated via cursor) |
 | `tools/call` | Client → Server | Invoke a tool by name with arguments |
 
+### Utility Methods
+
+| Method | Direction | Purpose |
+| --- | --- | --- |
+| `ping` | Client → Server | Liveness check; returns `{"result": {}}` |
+
+`ping` is handled in all session states (IDLE, INITIALIZING, ACTIVE).
+In CLOSED state, it returns a JSON-RPC error.
+
 ### Errors
 
 Two levels of error reporting:

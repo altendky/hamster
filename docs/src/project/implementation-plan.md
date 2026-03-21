@@ -97,14 +97,22 @@ omission.
 | `name` | `str` |
 | `version` | `str` |
 
+**`ToolsCapability`** --- frozen dataclass.
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `list_changed` | `bool` | `False` |
+
 **`ServerCapabilities`** --- frozen dataclass.
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `tools` | `bool` | `True` |
+| `tools` | `ToolsCapability \| None` | `ToolsCapability()` |
 
-`tools=True` means "we support tools".
-`jsonrpc.py` serializes this to `{"tools": {}}` on the wire.
+`tools=ToolsCapability()` means "we support tools, no `listChanged`".
+`tools=ToolsCapability(list_changed=True)` advertises `listChanged`.
+`tools=None` means "tools not supported".
+`jsonrpc.py` handles serialization (see D020).
 
 **`ServiceCallResult`** --- frozen dataclass.
 Returned by `EffectHandler.execute_service_call()`, consumed by
@@ -152,6 +160,9 @@ and routing.
   `FrozenInstanceError`).
 - `Content` union accepts both `TextContent` and `ImageContent`.
 - `CallToolResult` defaults (`is_error=False`).
+- `ToolsCapability` defaults (`list_changed=False`).
+- `ServerCapabilities` defaults (`tools=ToolsCapability()`).
+- `ServerCapabilities(tools=None)` for tools-not-supported case.
 - `ServiceCallResult` construction for success and error cases.
 - `IncomingRequest` construction with all fields.
 
@@ -261,7 +272,7 @@ Handles the top-level JSON value after `json.loads`:
 | `serialize_content(Content)` | `{"type": "text", "text": ...}` or `{"type": "image", "data": ..., "mimeType": ...}` |
 | `serialize_call_tool_result(CallToolResult)` | `{"content": [...]}` --- `"isError"` key omitted when false, included when true |
 | `serialize_server_info(ServerInfo)` | `{"name": ..., "version": ...}` |
-| `serialize_capabilities(ServerCapabilities)` | `{"tools": {}}` when true, `{}` when false |
+| `serialize_capabilities(ServerCapabilities)` | `{"tools": {}}` when `ToolsCapability(list_changed=False)`, `{"tools": {"listChanged": true}}` when `list_changed=True`, `{}` when `None` |
 
 ### MCP response builders
 
@@ -314,8 +325,10 @@ Handles the top-level JSON value after `json.loads`:
 - `Tool` --- camelCase `inputSchema`.
 - `CallToolResult(is_error=False)` --- `isError` key absent.
 - `CallToolResult(is_error=True)` --- `"isError": true`.
-- `ServerCapabilities(tools=True)` --- `{"tools": {}}`.
-- `ServerCapabilities(tools=False)` --- `{}`.
+- `ServerCapabilities(tools=ToolsCapability())` --- `{"tools": {}}`.
+- `ServerCapabilities(tools=ToolsCapability(list_changed=True))` ---
+  `{"tools": {"listChanged": true}}`.
+- `ServerCapabilities(tools=None)` --- `{}`.
 
 **MCP response builders:**
 
@@ -565,7 +578,8 @@ Dispatches by tool name:
   `ServiceCall(domain, service, target, data, FormatServiceResponse())`.
 - `hamster_services_schema` --- calls `describe_selector()`, returns
   `Done`.
-- Unknown name --- raises `ValueError`.
+- Unknown name --- returns `Done(CallToolResult(is_error=True))` with
+  error message (see D020).
 
 Three of the four tools return `Done` immediately (pure computation).
 Only `hamster_services_call` produces a `ServiceCall` effect requiring
@@ -604,11 +618,13 @@ message and `is_error=True`.
 - Case-insensitive matching.
 - Domain filter restricts results.
 - No match -> "no results" message.
+- Empty index + any query -> "no results" message.
 
 **`explain()`:**
 
 - Known service -> raw HA description with fields, selectors, target.
 - Unknown service -> `None`.
+- Empty index + any domain/service -> `None`.
 - Service with sections (nested field groups) -> fields shown flattened.
 
 **Selector descriptions:**
@@ -626,8 +642,12 @@ message and `is_error=True`.
   correct domain, service, target, data.
 - `hamster_services_call` with unknown service -> `Done` with
   `is_error=True`.
+- `hamster_services_search` with empty index -> `Done` with "no results"
+  text.
+- `hamster_services_call` with empty index -> `Done` with
+  `is_error=True` (service not in index).
 - `hamster_services_schema` -> `Done` with selector description.
-- Unknown tool name -> `ValueError`.
+- Unknown tool name -> `Done` with `is_error=True`.
 
 **`resume()`:**
 
@@ -871,7 +891,10 @@ no mocks.  The entire protocol is testable with plain data.
 - Wrong `Content-Type` -> `SendResponse(415)`.
 - `Content-Type` with parameters (e.g. `application/json; charset=utf-8`)
   -> accepted.
-- Missing `Accept` -> `SendResponse(406)`.
+- `Accept` header absent (`accept=None`) -> `SendResponse(406)`.
+- `Accept` header empty string (`accept=""`) -> `SendResponse(406)`.
+- `Accept: text/html` (present but incompatible) -> `SendResponse(406)`.
+- `Accept: application/json` -> accepted.
 - `Accept: */*` -> accepted.
 - `Accept: application/*` -> accepted.
 - Malformed JSON body -> `SendResponse(400)` with `PARSE_ERROR`.
