@@ -58,6 +58,8 @@ hamster/
 │   └── hamster/                          # HACS deployment shim
 │       ├── __init__.py                   # Re-exports from hamster.component
 │       ├── config_flow.py                # Re-exports
+│       ├── brand/
+│       │   └── icon.png
 │       ├── manifest.json
 │       ├── strings.json
 │       └── translations/en.json
@@ -65,7 +67,6 @@ hamster/
 │   ├── mkdocs.yml
 │   └── src/
 ├── hacs.json
-├── brand/icon.png
 ├── pyproject.toml
 ├── mise.toml
 ├── .pre-commit-config.yaml
@@ -79,12 +80,12 @@ hamster/
 
 | Module | Layer | Purpose |
 | --- | --- | --- |
-| `hamster.mcp._core.types` | Core | MCP data types: `Tool`, `Content`, `ServerInfo`, `ServerCapabilities` |
+| `hamster.mcp._core.types` | Core | MCP data types: `Tool`, `Content`, `ServerInfo`, `ServerCapabilities`, `IncomingRequest` |
 | `hamster.mcp._core.jsonrpc` | Core | JSON-RPC 2.0 message parsing and response building |
-| `hamster.mcp._core.events` | Core | `ReceiveResult` variants (`Initialized`, `ToolListResponse`, `ToolCallStarted`, `ProtocolError`, etc.) and tool effect/continuation types (`Done`, `ServiceCall`, `FormatServiceResponse`) |
-| `hamster.mcp._core.session` | Core | `SessionManager` --- multi-session container; routes by session ID, creates sessions via injected `session_id_factory`, tracks timeouts. `MCPServerSession` --- per-session sans-IO state machine. |
+| `hamster.mcp._core.events` | Core | `ReceiveResult` types (`SendResponse`, `RunEffects`) and tool effect/continuation types (`Done`, `ServiceCall`, `FormatServiceResponse`) |
+| `hamster.mcp._core.session` | Core | `SessionManager` --- HTTP-to-protocol pipeline; validates headers, parses JSON/JSON-RPC, routes by session ID, creates sessions via injected `session_id_factory`, tracks timeouts, builds responses. `MCPServerSession` --- per-session sans-IO state machine. |
 | `hamster.mcp._core.tools` | Core | Pure tool generation (`services_to_mcp_tools`), `call_tool()`, `resume()` |
-| `hamster.mcp._io.aiohttp` | Integration | `AiohttpMCPTransport` --- bridges aiohttp requests to `SessionManager`, runs effect dispatch loop. Timeout wakeup loop. `EffectHandler` protocol definition. |
+| `hamster.mcp._io.aiohttp` | Integration | `AiohttpMCPTransport` --- thin adapter; extracts headers/body from aiohttp, delegates to `SessionManager`, runs effect dispatch loop. Timeout wakeup loop. `EffectHandler` protocol definition. |
 | `hamster.component` | Application | HA integration entry point (`async_setup_entry`, `async_unload_entry`) |
 | `hamster.component.config_flow` | Application | Config flow (setup) + options flow (tristate control) |
 | `hamster.component.http` | Application | `HamsterMCPView` --- `HomeAssistantView` subclass, wires transport + HA auth. `HamsterEffectHandler` --- implements `EffectHandler`, executes `hass.services.async_call()`. |
@@ -93,52 +94,48 @@ hamster/
 
 ## Core API: `ReceiveResult`
 
-`SessionManager.receive_message()` returns a discriminated union describing
-what the transport should do next.
-Protocol-level results (initialization, errors) include pre-built JSON-RPC
-responses.
-Application-level results (tool calls) include effect objects for the
-transport to execute.
+`SessionManager.receive_request()` takes an `IncomingRequest` (raw HTTP
+data) and returns a `ReceiveResult` telling the transport exactly what to
+send back.  The sans-IO boundary sits at raw HTTP: the transport extracts
+header strings and body bytes from the framework, the core handles
+everything else.
 
 ```python
-# All in _core
+# _core.types
+@dataclass(frozen=True)
+class IncomingRequest:
+    """Framework-agnostic HTTP request data."""
+    http_method: str
+    content_type: str | None
+    accept: str | None
+    origin: str | None
+    session_id: str | None   # from Mcp-Session-Id header
+    body: bytes
+
+# _core.events
+@dataclass(frozen=True)
+class SendResponse:
+    """Complete HTTP response instruction."""
+    status: int
+    headers: dict[str, str]
+    body: dict[str, object] | None  # JSON body, or None for no-body
 
 @dataclass(frozen=True)
-class Initialized:
-    """New session created. Send JSON-RPC response + Mcp-Session-Id header."""
-    session_id: str
-    response: dict
-
-@dataclass(frozen=True)
-class NotificationAcked:
-    """Notification processed. Send HTTP 202, no body."""
-    pass
-
-@dataclass(frozen=True)
-class ToolListResponse:
-    """Tool list ready. Send complete JSON-RPC response."""
-    response: dict
-
-@dataclass(frozen=True)
-class ToolCallStarted:
-    """Tool call initiated. Transport must run the effect dispatch loop."""
+class RunEffects:
+    """Tool call needs I/O. Transport runs effects, then calls back."""
     request_id: JsonRpcId
     effect: ToolEffect
 
-@dataclass(frozen=True)
-class ProtocolError:
-    """Protocol-level error. Send pre-built JSON-RPC error response."""
-    response: dict
-    http_status: int
-
-ReceiveResult = (
-    Initialized | NotificationAcked | ToolListResponse
-    | ToolCallStarted | ProtocolError
-)
+ReceiveResult = SendResponse | RunEffects
 ```
 
-The transport dispatch is a simple match/case --- see
-[Data Flow](data-flow.md) for the full sequence diagrams.
+The transport dispatch is a two-arm match/case:
+
+- `SendResponse` --- translate directly to an HTTP response.
+- `RunEffects` --- execute the effect dispatch loop, then call
+  `manager.build_effect_response()` to get a `SendResponse`.
+
+See [Data Flow](data-flow.md) for the full sequence diagrams.
 
 ## Effect Handler Protocol
 
@@ -156,17 +153,17 @@ flowchart TB
     end
 
     subgraph io["hamster.mcp._io"]
-        transport["AiohttpMCPTransport\n+ effect dispatch loop"]
+        transport["AiohttpMCPTransport\n(thin adapter + effect dispatch)"]
         protocol["«Protocol» EffectHandler\nexecute_service_call()"]
     end
 
     subgraph core["hamster.mcp._core"]
-        manager["SessionManager\n(routes by ID, holds tool cache,\ntracks timeouts)"]
+        manager["SessionManager\n(HTTP→protocol pipeline,\nvalidation, parsing, routing,\ntool cache, timeouts)"]
         session["MCPServerSession\n(per-session state machine)"]
     end
 
     view --> transport
-    transport --> manager
+    transport -->|"IncomingRequest →\n← SendResponse / RunEffects"| manager
     manager --> session
     transport -.->|executes effects via| protocol
     handler -.->|implements| protocol
@@ -185,12 +182,15 @@ class EffectHandler(Protocol):
 
 | Concern | Owner | Layer |
 | --- | --- | --- |
-| HTTP header extraction | Transport | `_io` |
-| JSON body parsing | Transport | `_io` |
-| HTTP response construction | Transport | `_io` |
+| Read body bytes, extract header strings | Transport | `_io` |
+| Build `IncomingRequest` | Transport | `_io` |
+| Translate `SendResponse` to framework response | Transport | `_io` |
 | Effect dispatch loop | Transport | `_io` |
 | Timeout wakeup loop | Transport | `_io` |
-| JSON-RPC parsing + response building | MCPServerSession | `_core` |
+| HTTP header validation | SessionManager | `_core` |
+| JSON body parsing | SessionManager | `_core` |
+| HTTP response building (status, headers, body) | SessionManager | `_core` |
+| JSON-RPC parsing + response building | SessionManager | `_core` |
 | Session state machine | MCPServerSession | `_core` |
 | Session routing + creation | SessionManager | `_core` |
 | Session timeout tracking | SessionManager | `_core` |
@@ -201,20 +201,21 @@ class EffectHandler(Protocol):
 
 ### Error Handling Layers
 
-Each layer handles its own error class:
+All errors except I/O failures are handled in the sans-IO core:
 
 | Error | Who handles | Result |
 | --- | --- | --- |
-| Malformed JSON, bad headers | **Transport** | HTTP 400 via `jsonrpc` helpers |
-| Unknown session ID | **SessionManager** | `ProtocolError(http_status=404)` |
-| Missing session ID after init | **SessionManager** | `ProtocolError(http_status=400)` |
-| Wrong state, unknown method | **MCPServerSession** | `ProtocolError` with JSON-RPC error code |
-| Invalid JSON-RPC structure | **MCPServerSession** | `ProtocolError` with `-32600` |
-| HA service call exception | **EffectHandler** | `ServiceCallResult` with error; `resume()` produces `Done(isError=True)` |
+| Bad headers (Content-Type, Accept, Origin) | **SessionManager** | `SendResponse(415)`, `SendResponse(406)`, `SendResponse(403)` |
+| Malformed JSON body | **SessionManager** | `SendResponse(400)` with `PARSE_ERROR` |
+| Invalid JSON-RPC structure | **SessionManager** | `SendResponse(400)` with `-32600` |
+| Unknown session ID | **SessionManager** | `SendResponse(404)` |
+| Missing session ID after init | **SessionManager** | `SendResponse(400)` |
+| Wrong state, unknown method | **MCPServerSession** | Error result (manager wraps into `SendResponse`) |
+| HA service call exception | **EffectHandler** | `ServiceCallResult` with error; `resume()` produces `Done(CallToolResult(is_error=True))` |
 
 Protocol errors never escape the core.
 Application errors never escape the handler.
-The transport just does match/case.
+The transport just does match/case on `SendResponse` vs `RunEffects`.
 
 ## Distribution
 
