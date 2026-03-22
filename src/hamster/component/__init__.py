@@ -24,10 +24,12 @@ from hamster.mcp._core.supervisor_group import SupervisorGroup
 from hamster.mcp._core.types import ServerInfo
 from hamster.mcp._io.aiohttp import AiohttpMCPTransport
 
-from .const import DEFAULT_IDLE_TIMEOUT, DOMAIN
+from .const import DEFAULT_ENABLE_SERVICES_GROUP, DEFAULT_IDLE_TIMEOUT, DOMAIN
 from .http import HamsterEffectHandler, HamsterMCPView
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import Event, HomeAssistant
 
@@ -35,8 +37,6 @@ _LOGGER = logging.getLogger(__name__)
 
 # Max retry attempts for initial index build
 _MAX_RETRIES = 4
-# Feature flag to disable services group (for debugging)
-_ENABLE_SERVICES_GROUP = False
 # Retry delays in seconds (exponential backoff capped at 15s)
 _RETRY_DELAYS = [1.0, 2.0, 4.0, 8.0, 15.0]
 
@@ -64,11 +64,16 @@ def is_supervisor_available(hass: HomeAssistant) -> bool:
     return bool(os.environ.get("SUPERVISOR_TOKEN"))
 
 
-async def _build_registry(hass: HomeAssistant) -> GroupRegistry:
+async def _build_registry(
+    hass: HomeAssistant,
+    *,
+    enable_services_group: bool,
+) -> GroupRegistry:
     """Build a GroupRegistry with all available groups.
 
     Args:
         hass: Home Assistant instance
+        enable_services_group: Whether to include the services group
 
     Returns:
         GroupRegistry with all groups registered
@@ -76,7 +81,7 @@ async def _build_registry(hass: HomeAssistant) -> GroupRegistry:
     registry = GroupRegistry()
 
     # Services group
-    if _ENABLE_SERVICES_GROUP:
+    if enable_services_group:
         descriptions = await async_get_all_descriptions(hass)
         registry.register(ServicesGroup(descriptions))
 
@@ -92,7 +97,11 @@ async def _build_registry(hass: HomeAssistant) -> GroupRegistry:
     return registry
 
 
-async def _build_registry_with_retry(hass: HomeAssistant) -> GroupRegistry:
+async def _build_registry_with_retry(
+    hass: HomeAssistant,
+    *,
+    enable_services_group: bool,
+) -> GroupRegistry:
     """Build a GroupRegistry with retry on failure.
 
     If building fails completely, returns an empty registry.
@@ -101,13 +110,16 @@ async def _build_registry_with_retry(hass: HomeAssistant) -> GroupRegistry:
 
     Args:
         hass: Home Assistant instance
+        enable_services_group: Whether to include the services group
 
     Returns:
         GroupRegistry, possibly with some groups empty if they failed
     """
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            return await _build_registry(hass)
+            return await _build_registry(
+                hass, enable_services_group=enable_services_group
+            )
         except Exception:
             if attempt < _MAX_RETRIES:
                 delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
@@ -124,18 +136,25 @@ async def _build_registry_with_retry(hass: HomeAssistant) -> GroupRegistry:
                     _MAX_RETRIES + 1,
                 )
                 # Build partial registry - try each group separately
-                return await _build_partial_registry(hass)
+                return await _build_partial_registry(
+                    hass, enable_services_group=enable_services_group
+                )
     # Should not reach here
     return GroupRegistry()  # pragma: no cover
 
 
-async def _build_partial_registry(hass: HomeAssistant) -> GroupRegistry:
+async def _build_partial_registry(
+    hass: HomeAssistant,
+    *,
+    enable_services_group: bool,
+) -> GroupRegistry:
     """Build a partial registry when full build fails.
 
     Tries to build each group independently, logging errors for failures.
 
     Args:
         hass: Home Assistant instance
+        enable_services_group: Whether to include the services group
 
     Returns:
         GroupRegistry with whatever groups could be built
@@ -143,7 +162,7 @@ async def _build_partial_registry(hass: HomeAssistant) -> GroupRegistry:
     registry = GroupRegistry()
 
     # Try services group
-    if _ENABLE_SERVICES_GROUP:
+    if enable_services_group:
         try:
             descriptions = await async_get_all_descriptions(hass)
             registry.register(ServicesGroup(descriptions))
@@ -177,6 +196,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     Returns:
         True if setup was successful
     """
+    # Read config from entry options
+    enable_services_group = entry.options.get(
+        "enable_services_group", DEFAULT_ENABLE_SERVICES_GROUP
+    )
+
     # Get version from package metadata
     try:
         version = importlib.metadata.version("hamster")
@@ -193,20 +217,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     effect_handler = HamsterEffectHandler(hass)
 
     # Build initial group registry
-    registry = await _build_registry_with_retry(hass)
+    registry = await _build_registry_with_retry(
+        hass, enable_services_group=enable_services_group
+    )
     manager.update_registry(registry)
 
     # Create services group rebuild callback for the transport
     # Only services group needs rebuilding on service events;
     # hass and supervisor groups don't change at runtime
-    async def rebuild_services_callback() -> None:
-        """Rebuild the services group after service changes."""
-        try:
-            descriptions = await async_get_all_descriptions(hass)
-            services_group = ServicesGroup(descriptions)
-            manager.update_services_group(services_group)
-        except Exception:
-            _LOGGER.warning("Failed to rebuild services group, keeping existing")
+    rebuild_services_callback: Callable[[], Awaitable[None]] | None = None
+    if enable_services_group:
+
+        async def _rebuild_services() -> None:
+            """Rebuild the services group after service changes."""
+            try:
+                descriptions = await async_get_all_descriptions(hass)
+                services_group = ServicesGroup(descriptions)
+                manager.update_services_group(services_group)
+            except Exception:
+                _LOGGER.warning("Failed to rebuild services group, keeping existing")
+
+        rebuild_services_callback = _rebuild_services
 
     # Create transport
     transport = AiohttpMCPTransport(
@@ -217,18 +248,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     view = HamsterMCPView(transport)
     hass.http.register_view(view)
 
-    # Listen for service events
-    def on_service_event(event: Event) -> None:
-        """Handle service registered/removed events."""
-        manager.notify_services_changed(time.monotonic())
-        transport.notify_activity()
+    # Listen for service events (only if services group is enabled)
+    if enable_services_group:
 
-    unsub_registered = hass.bus.async_listen(EVENT_SERVICE_REGISTERED, on_service_event)
-    unsub_removed = hass.bus.async_listen(EVENT_SERVICE_REMOVED, on_service_event)
+        def on_service_event(event: Event) -> None:
+            """Handle service registered/removed events."""
+            manager.notify_services_changed(time.monotonic())
+            transport.notify_activity()
 
-    # Register cleanup on unload
-    entry.async_on_unload(unsub_registered)
-    entry.async_on_unload(unsub_removed)
+        unsub_registered = hass.bus.async_listen(
+            EVENT_SERVICE_REGISTERED, on_service_event
+        )
+        unsub_removed = hass.bus.async_listen(EVENT_SERVICE_REMOVED, on_service_event)
+
+        # Register cleanup on unload
+        entry.async_on_unload(unsub_registered)
+        entry.async_on_unload(unsub_removed)
 
     # Start wakeup loop as background task
     wakeup_task = entry.async_create_background_task(

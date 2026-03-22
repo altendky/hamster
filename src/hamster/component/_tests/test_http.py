@@ -11,9 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 import pytest
-from pytest_homeassistant_custom_component.common import (  # type: ignore[import-untyped]
-    MockConfigEntry,
-)
 
 from hamster.component.const import DOMAIN
 
@@ -21,6 +18,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from homeassistant.core import HomeAssistant
+    from pytest_homeassistant_custom_component.common import (  # type: ignore[import-untyped]
+        MockConfigEntry,
+    )
 
 # Enable sockets for HTTP tests
 pytestmark = pytest.mark.enable_socket
@@ -29,19 +29,6 @@ pytestmark = pytest.mark.enable_socket
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Enable custom integrations for testing."""
-
-
-@pytest.fixture
-def mock_config_entry(hass: HomeAssistant) -> MockConfigEntry:
-    """Create a mock config entry."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Hamster MCP",
-        data={},
-        entry_id="test_entry_id",
-    )
-    entry.add_to_hass(hass)
-    return entry
 
 
 @pytest.fixture

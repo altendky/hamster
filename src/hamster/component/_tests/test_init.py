@@ -6,14 +6,14 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import (  # type: ignore[import-untyped]
-    MockConfigEntry,
-)
 
 from hamster.component.const import DOMAIN
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
+    from pytest_homeassistant_custom_component.common import (  # type: ignore[import-untyped]
+        MockConfigEntry,
+    )
 
 from homeassistant.config_entries import ConfigEntryState
 
@@ -30,19 +30,6 @@ def mock_http(hass: HomeAssistant) -> MagicMock:
     mock.register_view = MagicMock()
     hass.http = mock
     return mock
-
-
-@pytest.fixture
-def mock_config_entry(hass: HomeAssistant) -> MockConfigEntry:
-    """Create a mock config entry."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Hamster MCP",
-        data={},
-        entry_id="test_entry_id",
-    )
-    entry.add_to_hass(hass)
-    return entry
 
 
 async def test_async_setup_entry_succeeds(

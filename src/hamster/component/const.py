@@ -2,3 +2,4 @@
 
 DOMAIN = "hamster"
 DEFAULT_IDLE_TIMEOUT: float = 1800.0  # 30 minutes
+DEFAULT_ENABLE_SERVICES_GROUP: bool = False
