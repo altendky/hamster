@@ -41,8 +41,13 @@ test = [
 dev = [
     "hamster[test]",
     "aiohttp",
-    "ruff",
+    "ruff>=0.11",
     "mypy",
+]
+# Component tests — requires Home Assistant test infrastructure
+component-test = [
+    "hamster[test]",
+    "pytest-homeassistant-custom-component>=0.13",
 ]
 docs = [
     "mkdocs-material",

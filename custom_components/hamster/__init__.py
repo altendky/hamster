@@ -6,8 +6,6 @@ src/hamster/component/.  This shim exists because HA discovers custom
 components by looking for custom_components/<domain>/__init__.py.
 """
 
-# TODO: uncomment once hamster.component has real entry points
-# from hamster.component import (
-#     async_setup_entry,
-#     async_unload_entry,
-# )
+from hamster.component import async_setup_entry, async_unload_entry
+
+__all__ = ["async_setup_entry", "async_unload_entry"]
