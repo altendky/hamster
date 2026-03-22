@@ -35,6 +35,13 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Get version from package metadata at module load time
+# (avoids blocking I/O in async context)
+try:
+    _HAMSTER_VERSION = importlib.metadata.version("hamster")
+except importlib.metadata.PackageNotFoundError:
+    _HAMSTER_VERSION = "0.0.0-dev"
+
 # Max retry attempts for initial index build
 _MAX_RETRIES = 4
 # Retry delays in seconds (exponential backoff capped at 15s)
@@ -201,14 +208,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "enable_services_group", DEFAULT_ENABLE_SERVICES_GROUP
     )
 
-    # Get version from package metadata
-    try:
-        version = importlib.metadata.version("hamster")
-    except importlib.metadata.PackageNotFoundError:
-        version = "0.0.0-dev"
-
     # Create components
-    server_info = ServerInfo(name="hamster", version=version)
+    server_info = ServerInfo(name="hamster", version=_HAMSTER_VERSION)
     manager = SessionManager(
         server_info=server_info,
         idle_timeout=DEFAULT_IDLE_TIMEOUT,
