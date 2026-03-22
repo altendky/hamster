@@ -35,6 +35,8 @@ _LOGGER = logging.getLogger(__name__)
 
 # Max retry attempts for initial index build
 _MAX_RETRIES = 4
+# Feature flag to disable services group (for debugging)
+_ENABLE_SERVICES_GROUP = False
 # Retry delays in seconds (exponential backoff capped at 15s)
 _RETRY_DELAYS = [1.0, 2.0, 4.0, 8.0, 15.0]
 
@@ -74,8 +76,9 @@ async def _build_registry(hass: HomeAssistant) -> GroupRegistry:
     registry = GroupRegistry()
 
     # Services group
-    descriptions = await async_get_all_descriptions(hass)
-    registry.register(ServicesGroup(descriptions))
+    if _ENABLE_SERVICES_GROUP:
+        descriptions = await async_get_all_descriptions(hass)
+        registry.register(ServicesGroup(descriptions))
 
     # Hass group (WebSocket commands)
     ws_registry = hass.data.get("websocket_api", {})
@@ -140,12 +143,13 @@ async def _build_partial_registry(hass: HomeAssistant) -> GroupRegistry:
     registry = GroupRegistry()
 
     # Try services group
-    try:
-        descriptions = await async_get_all_descriptions(hass)
-        registry.register(ServicesGroup(descriptions))
-    except Exception:
-        _LOGGER.warning("Failed to build services group, starting empty")
-        registry.register(ServicesGroup({}))
+    if _ENABLE_SERVICES_GROUP:
+        try:
+            descriptions = await async_get_all_descriptions(hass)
+            registry.register(ServicesGroup(descriptions))
+        except Exception:
+            _LOGGER.warning("Failed to build services group, starting empty")
+            registry.register(ServicesGroup({}))
 
     # Try hass group
     try:
