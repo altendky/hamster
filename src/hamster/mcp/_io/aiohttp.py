@@ -20,9 +20,22 @@ from typing import TYPE_CHECKING, Protocol
 
 from aiohttp import web
 
-from hamster.mcp._core.events import Done, RunEffects, SendResponse, ServiceCall
+from hamster.mcp._core.events import (
+    Done,
+    HassCommand,
+    RunEffects,
+    SendResponse,
+    ServiceCall,
+    SupervisorCall,
+)
 from hamster.mcp._core.tools import resume
-from hamster.mcp._core.types import CallToolResult, IncomingRequest, ServiceCallResult
+from hamster.mcp._core.types import (
+    CallToolResult,
+    HassCommandResult,
+    IncomingRequest,
+    ServiceCallResult,
+    SupervisorCallResult,
+)
 
 if TYPE_CHECKING:
     from hamster.mcp._core.events import ToolEffect
@@ -32,7 +45,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class EffectHandler(Protocol):
-    """Protocol for executing service call effects.
+    """Protocol for executing effects.
 
     Defined here, implemented by hamster.component.http.
     """
@@ -43,6 +56,7 @@ class EffectHandler(Protocol):
         service: str,
         target: dict[str, object] | None,
         data: dict[str, object],
+        user_id: str | None,
     ) -> ServiceCallResult:
         """Execute a Home Assistant service call.
 
@@ -51,9 +65,48 @@ class EffectHandler(Protocol):
             service: Service name (e.g. 'turn_on')
             target: Target entities/devices/areas, or None
             data: Service data parameters
+            user_id: Authenticated user ID for authorization
 
         Returns:
             ServiceCallResult indicating success or failure
+        """
+        ...
+
+    async def execute_hass_command(
+        self,
+        command_type: str,
+        params: dict[str, object],
+        user_id: str | None,
+    ) -> HassCommandResult:
+        """Execute a WebSocket command.
+
+        Args:
+            command_type: Command type (e.g. 'get_states')
+            params: Command parameters
+            user_id: Authenticated user ID for authorization
+
+        Returns:
+            HassCommandResult indicating success or failure
+        """
+        ...
+
+    async def execute_supervisor_call(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, object],
+        user_id: str | None,
+    ) -> SupervisorCallResult:
+        """Execute a Supervisor API call.
+
+        Args:
+            method: HTTP method (e.g. 'GET', 'POST')
+            path: API path (e.g. '/core/logs')
+            params: Query params (GET) or body (POST)
+            user_id: Authenticated user ID for authorization
+
+        Returns:
+            SupervisorCallResult indicating success or failure
         """
         ...
 
@@ -103,6 +156,12 @@ class AiohttpMCPTransport:
             return web.Response(status=503)
 
         body = await request.read()
+
+        # Extract user_id from HA's authenticated request
+        # HA stores the authenticated user on the request via middleware
+        user = request.get("hass_user")
+        user_id = user.id if user else None
+
         incoming = IncomingRequest(
             http_method=request.method,
             content_type=request.content_type,
@@ -111,6 +170,7 @@ class AiohttpMCPTransport:
             host=request.host,
             session_id=request.headers.get("Mcp-Session-Id"),
             body=body,
+            user_id=user_id,
         )
 
         result = self._manager.receive_request(incoming, now=time.monotonic())
@@ -184,6 +244,7 @@ class AiohttpMCPTransport:
                         current.service,
                         current.target,
                         current.data,
+                        current.user_id,
                     )
                 except Exception as err:
                     _LOGGER.exception(
@@ -196,6 +257,44 @@ class AiohttpMCPTransport:
                         error=f"Unexpected error: {type(err).__name__}: {err}",
                     )
                 current = resume(current.continuation, io_result)
+            elif isinstance(current, HassCommand):
+                try:
+                    hass_result = await self._effect_handler.execute_hass_command(
+                        current.command_type,
+                        current.params,
+                        current.user_id,
+                    )
+                except Exception as err:
+                    _LOGGER.exception(
+                        "Error executing hass command %s",
+                        current.command_type,
+                    )
+                    hass_result = HassCommandResult(
+                        success=False,
+                        error=f"Unexpected error: {type(err).__name__}: {err}",
+                    )
+                current = resume(current.continuation, hass_result)
+            elif isinstance(current, SupervisorCall):
+                try:
+                    supervisor_result = (
+                        await self._effect_handler.execute_supervisor_call(
+                            current.method,
+                            current.path,
+                            current.params,
+                            current.user_id,
+                        )
+                    )
+                except Exception as err:
+                    _LOGGER.exception(
+                        "Error executing supervisor call %s %s",
+                        current.method,
+                        current.path,
+                    )
+                    supervisor_result = SupervisorCallResult(
+                        success=False,
+                        error=f"Unexpected error: {type(err).__name__}: {err}",
+                    )
+                current = resume(current.continuation, supervisor_result)
 
     def shutdown(self) -> None:
         """Shutdown the transport.

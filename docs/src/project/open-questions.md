@@ -29,6 +29,12 @@ meta-tools.  Per-service filtering via an options flow may be revisited as a
 future addition if there's a need to restrict which services the LLM can
 discover or invoke.
 
+**Superseded by:** Q028-Q030 now cover command exposure configuration for
+the multi-source architecture.  The original tristate control concept
+(per-service enable/disable) is replaced by group-based and command-based
+exposure controls across all three source groups (services, hass,
+supervisor).
+
 ## ~~Q006: HA Service Call Error Mapping~~ --- RESOLVED
 
 Resolved in the implementation plan (Stage 8).  `HamsterEffectHandler`
@@ -307,3 +313,131 @@ produce Python type errors.
 3. Document expected types clearly in `explain` output and trust the LLM.
 
 **Leaning toward:** Option 2 for v1, revisit if LLM errors are common.
+
+## Q025: Documentation Enrichment --- Version Matching
+
+**Question:** How should Hamster match GitHub documentation to the running
+HA version?
+
+**Context:** The `hass` group (WebSocket commands) lacks rich runtime
+metadata.  Documentation from the `home-assistant/developers.home-assistant`
+repo can provide command descriptions, parameter documentation, and examples.
+However, the docs repo has no version tags --- it tracks "current" on `master`.
+
+**Current decision:** Use `master` branch always.  Accept potential drift
+between docs and running HA version.
+
+**Alternative strategies to consider:**
+
+1. **Match by date** --- Get core release date from `hass.config.version`,
+   find closest docs commit.  Complex and fragile.
+2. **Bundle at Hamster release** --- Parse docs at Hamster release time,
+   ship with our releases.  We control versioning but docs are tied to
+   Hamster releases, not HA versions.
+3. **Local docs path** --- For dev/source installs, allow configuring a
+   local checkout of the docs repo.
+4. **Write our own** --- Hand-write descriptions for the commands we
+   expose.  Full control but maintenance burden.
+
+**Open for future consideration.**
+
+## Q026: Documentation Enrichment --- Refresh Triggers
+
+**Question:** When and how should documentation be refreshed?
+
+**Context:** Documentation is fetched from GitHub and cached.  The cache
+may become stale after HA upgrades.
+
+**Current decision:**
+
+- On version mismatch (cached docs version != running HA version), expose
+  nothing from docs until manually refreshed
+- Refresh is user-triggered via MCP tool or HA settings UI
+- Both the user and the LLM can trigger a refresh
+
+**Alternative strategies to consider:**
+
+1. **Auto-refresh on version mismatch** --- Automatically fetch new docs
+   when HA version changes.  Simpler UX but adds startup latency and
+   potential failure modes.
+2. **Background refresh** --- Refresh asynchronously without blocking.
+   Commands work with stale docs until refresh completes.
+3. **Prompt user** --- Show a notification suggesting refresh when version
+   mismatch is detected.
+
+**Open for future consideration.**
+
+## Q027: Documentation Enrichment --- Dev/Source Installs
+
+**Question:** How should documentation be handled for development or
+source-based HA installs?
+
+**Context:** Developers running HA from source may have local checkouts
+of the docs repo.  The `master` branch of docs may not match their
+development branch.
+
+**Potential approaches:**
+
+1. **Detect dev mode** --- Check `hass.config.dev` or similar flag.
+2. **Configurable local path** --- Allow setting a local docs directory.
+3. **Fall back to `next` branch** --- For dev installs, fetch from the
+   `next` branch instead of `master`.
+
+**Grouped with Q025 and Q026 as part of docs enrichment strategy.**
+
+## Q028: Config UX --- Command Exposure Granularity
+
+**Question:** At what granularity should users be able to enable/disable
+command exposure?
+
+**Context:** Hamster exposes three source groups (`services`, `hass`,
+`supervisor`) with many commands each.  Users may want to restrict what
+the LLM can access.
+
+**Options:**
+
+1. **Per-group** --- Enable/disable entire groups (e.g., disable all
+   supervisor commands).
+2. **Per-category** --- Group commands by category (queries vs. mutations,
+   or by domain like `config/*`, `system_log/*`).
+3. **Per-command** --- Fine-grained control over individual commands.
+4. **Combination** --- Group-level defaults with per-command overrides.
+
+**Deferred to config UX design phase.**
+
+## Q029: Config UX --- Default Exposure States
+
+**Question:** What should be enabled or disabled by default?
+
+**Context:** Security vs. usability tradeoff.  More restrictive defaults
+are safer but may frustrate users who expect full access.
+
+**Considerations:**
+
+- The `services` group has always been the primary interface --- probably
+  enabled by default.
+- The `hass` group includes both read-only queries and mutations ---
+  consider splitting defaults.
+- The `supervisor` group includes powerful operations (backups, add-on
+  management) --- consider disabled by default?
+- "Admin" operations like registry mutations --- enabled or disabled?
+
+**Deferred to config UX design phase.**
+
+## Q030: Config UX --- UI/UX Design
+
+**Question:** How should command exposure configuration be presented in
+the HA UI?
+
+**Context:** HA custom components typically use config flows and options
+flows for configuration.  The multi-source architecture with many commands
+needs a clear UX.
+
+**Considerations:**
+
+- Options flow with toggles per group?
+- Expandable sections for per-command control?
+- Search/filter for finding specific commands?
+- Presets (e.g., "read-only", "full access")?
+
+**Deferred to config UX design phase.**

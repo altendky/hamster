@@ -237,13 +237,16 @@ loads the custom component it automatically pip-installs the library.
 ## Why a Custom Component
 
 The decision to build as a custom component (not an external server or add-on)
-was driven by one critical capability: only code running inside HA can access
-`async_get_all_descriptions()`, which returns service descriptions with field
-definitions, selectors, and target configuration.
+was driven by access to internal APIs unavailable to external clients:
 
-The external REST API (`/api/services`) lists services but does **not** include
-field schemas.
-The WebSocket API may include some schema info but is less complete.
+- **`async_get_all_descriptions()`** --- returns service descriptions with
+  field definitions, selectors, and target configuration.  The external REST
+  API (`/api/services`) lists services but does **not** include field schemas.
+- **`hass.data["websocket_api"]`** --- the WebSocket command registry with
+  handler functions and voluptuous schemas.  External clients can only invoke
+  commands, not discover their schemas programmatically.
+- **Supervisor client** --- direct access to the Supervisor API for logs,
+  add-on management, and host info on HA OS / Supervised installs.
 
 Additional benefits:
 
@@ -267,8 +270,137 @@ Trade-offs accepted:
 | `ha-mcp` (community) | Standalone/add-on | 95+ | Static | Token |
 | `hass-mcp-server` (ganhammar) | Custom component | 21 | Static | OAuth |
 | `mcp-assist` | Custom component | 11 | Index pattern | IP whitelist |
-| **Hamster** | Custom component | 4 meta-tools | **Dynamic discovery from descriptions** | HA built-in |
+| **Hamster** | Custom component | 4 meta-tools | **Dynamic multi-source discovery** | HA built-in |
 
 Hamster's unique position: meta-tool API gateway pattern (search/explain/call/schema)
-giving access to all HA services via 4 fixed tools, built-in HA auth, full admin
-access.  No existing project uses this approach.
+giving access to HA services, WebSocket commands, and Supervisor APIs via 4 fixed
+tools.  Built-in HA auth, full admin access.  No existing project uses this approach.
+
+## Multi-Source Architecture
+
+Hamster exposes HA capabilities through three distinct source groups, each with
+its own discovery mechanism and metadata enrichment.  See
+[D024](decisions.md#d024-multi-source-architecture) for design rationale.
+
+```mermaid
+flowchart TB
+    subgraph tools["MCP Tools"]
+        search["search<br/>Find commands across all groups"]
+        explain["explain<br/>Get description for path"]
+        schema["schema<br/>Get parameters for path"]
+        call["call<br/>Invoke path"]
+    end
+
+    subgraph groups["Source Groups"]
+        services["services/*<br/>light.turn_on<br/>switch.toggle<br/>..."]
+        hass["hass/*<br/>get_states<br/>call_service<br/>system_log/..."]
+        supervisor["supervisor/*<br/>core/logs<br/>addons<br/>host/info"]
+    end
+
+    tools --> groups
+```
+
+### Source Groups
+
+| Group | Source | Discovery | Enrichment |
+| --- | --- | --- | --- |
+| `services` | HA service registry | `hass.services.async_services()` | `async_get_all_descriptions()` (runtime) |
+| `hass` | WebSocket command registry | `hass.data["websocket_api"]` | GitHub docs (user-triggered fetch) |
+| `supervisor` | Supervisor client | Discovered via `hass` initially | TBD |
+
+### Path Format
+
+Commands are identified by `<group>/<path>`:
+
+| Full Path | Group | In-Group Path |
+| --- | --- | --- |
+| `services/light.turn_on` | services | `light.turn_on` |
+| `hass/get_states` | hass | `get_states` |
+| `hass/config/entity_registry/list` | hass | `config/entity_registry/list` |
+| `supervisor/core/logs` | supervisor | `core/logs` |
+
+### Why Three Groups
+
+**Services (`services/*`):** HA's service registry provides the richest
+metadata via `async_get_all_descriptions()` --- field descriptions, selectors,
+target configuration.  This is the primary interface for actions (turning
+things on/off, triggering automations).
+
+**WebSocket Commands (`hass/*`):** HA's WebSocket API covers queries that
+services don't expose --- entity states, registries, history, system logs,
+config entries.  Commands are discoverable at runtime via
+`hass.data["websocket_api"]`.  However, HA maintainers have intentionally
+kept WebSocket APIs undocumented to preserve flexibility, so metadata is
+sparser than services.
+
+**Supervisor (`supervisor/*`):** The Supervisor runs as a separate process and
+provides capabilities unavailable through HA's internal APIs --- full logs
+(not just the in-memory `system_log` buffer), add-on management, backups,
+host info.  Only available on HA OS / Supervised installs.
+
+### Enrichment Sources
+
+Metadata comes from multiple sources, layered by availability:
+
+```mermaid
+flowchart LR
+    subgraph enrichment["Enrichment Sources"]
+        subgraph svc["Service Descriptions<br/>(runtime)"]
+            svc1["Field descriptions"]
+            svc2["Selectors"]
+            svc3["Targets"]
+        end
+        subgraph docs["GitHub Docs<br/>(fetched/cached)"]
+            docs1["Command descriptions"]
+            docs2["Examples"]
+            docs3["Parameter tables"]
+        end
+        subgraph reg["Registries<br/>(runtime)"]
+            reg1["Entity names"]
+            reg2["Device info"]
+            reg3["Area names"]
+        end
+    end
+
+    svc -->|"services/*"| output["Command Metadata"]
+    docs -->|"hass/*"| output
+    reg -->|"ID→name"| output
+```
+
+**Service descriptions** are fetched at runtime via
+`async_get_all_descriptions()`.  This is the richest metadata source.
+
+**GitHub docs** are fetched from the `master` branch of
+`home-assistant/developers.home-assistant` on user request.  The docs repo
+is separate from `home-assistant/core` and has no version tags, so
+version matching is approximate.  If docs are unavailable (not yet fetched,
+or fetch failed), commands in the `hass` group report "description
+unavailable" but remain callable --- the schema is always available from
+the voluptuous definitions in `hass.data["websocket_api"]`.
+
+**Registries** (entity, device, area, floor, label) provide human-readable
+names for IDs.  These are used to enrich command outputs, not command
+descriptions.
+
+### Filtering
+
+Commands are exposed with minimal filtering:
+
+- **Excluded:** Subscription commands (`subscribe_*`, `unsubscribe_*`) ---
+  wrong interaction model for MCP request/response
+- **Excluded:** Auth commands (`auth`) --- handled at connection level
+- **Included:** Everything else, including "admin" operations like logs,
+  config introspection, registry mutations
+
+User configurability of command exposure is deferred to the config UX
+design phase.
+
+### Supervisor Availability
+
+The `supervisor` group is only available on HA OS and Supervised installs.
+When unavailable:
+
+- Supervisor commands don't appear in search results
+- Attempts to describe/execute supervisor commands return clear errors
+- Detection is via environment variables (`SUPERVISOR`, `SUPERVISOR_TOKEN`)
+  and the presence of the `hassio` integration

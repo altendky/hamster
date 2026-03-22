@@ -4,16 +4,24 @@ from __future__ import annotations
 
 import re
 
-from hamster.mcp._core.events import Done, FormatServiceResponse, ServiceCall
+from hamster.mcp._core.events import (
+    Done,
+    FormatHassResponse,
+    FormatServiceResponse,
+    FormatSupervisorResponse,
+    ServiceCall,
+)
+from hamster.mcp._core.groups import GroupRegistry, ServicesGroup
 from hamster.mcp._core.tools import (
-    SELECTOR_DESCRIPTIONS,
     TOOLS,
-    ServiceIndex,
     call_tool,
-    describe_selector,
     resume,
 )
-from hamster.mcp._core.types import ServiceCallResult
+from hamster.mcp._core.types import (
+    HassCommandResult,
+    ServiceCallResult,
+    SupervisorCallResult,
+)
 
 
 class TestToolDefinitions:
@@ -40,196 +48,20 @@ class TestToolDefinitions:
     def test_expected_tool_names(self) -> None:
         names = {t.name for t in TOOLS}
         assert names == {
-            "hamster_services_search",
-            "hamster_services_explain",
-            "hamster_services_call",
-            "hamster_services_schema",
+            "hamster_search",
+            "hamster_explain",
+            "hamster_call",
+            "hamster_schema",
         }
-
-
-class TestServiceIndexConstruction:
-    """Tests for ServiceIndex construction."""
-
-    def test_empty_descriptions(self) -> None:
-        index = ServiceIndex({})
-        assert index.search("anything") == 'No services found matching "anything".'
-
-    def test_single_domain_service(self) -> None:
-        descriptions = {
-            "light": {
-                "turn_on": {
-                    "description": "Turn on a light",
-                    "fields": {},
-                },
-            },
-        }
-        index = ServiceIndex(descriptions)
-        result = index.search("light")
-        assert "light.turn_on" in result
-
-    def test_multiple_domains(self) -> None:
-        descriptions = {
-            "light": {"turn_on": {"description": "Turn on light"}},
-            "switch": {"turn_on": {"description": "Turn on switch"}},
-        }
-        index = ServiceIndex(descriptions)
-        result = index.search("turn_on")
-        assert "light.turn_on" in result
-        assert "switch.turn_on" in result
-
-
-class TestServiceIndexSearch:
-    """Tests for ServiceIndex.search()."""
-
-    def test_match_service_name(self) -> None:
-        descriptions = {"light": {"turn_on": {"description": "desc"}}}
-        index = ServiceIndex(descriptions)
-        result = index.search("turn_on")
-        assert "light.turn_on" in result
-
-    def test_match_description(self) -> None:
-        descriptions = {"light": {"turn_on": {"description": "Illuminate the room"}}}
-        index = ServiceIndex(descriptions)
-        result = index.search("illuminate")
-        assert "light.turn_on" in result
-
-    def test_match_field_names(self) -> None:
-        descriptions = {
-            "light": {
-                "turn_on": {
-                    "description": "Turn on",
-                    "fields": {"brightness": {"description": "Light level"}},
-                }
-            }
-        }
-        index = ServiceIndex(descriptions)
-        result = index.search("brightness")
-        assert "light.turn_on" in result
-
-    def test_case_insensitive(self) -> None:
-        descriptions = {"light": {"turn_on": {"description": "TURN ON"}}}
-        index = ServiceIndex(descriptions)
-        result = index.search("turn on")
-        assert "light.turn_on" in result
-
-    def test_domain_filter(self) -> None:
-        descriptions = {
-            "light": {"turn_on": {"description": "Turn on light"}},
-            "switch": {"turn_on": {"description": "Turn on switch"}},
-        }
-        index = ServiceIndex(descriptions)
-        result = index.search("turn_on", domain="light")
-        assert "light.turn_on" in result
-        assert "switch.turn_on" not in result
-
-    def test_no_match(self) -> None:
-        descriptions = {"light": {"turn_on": {"description": "Turn on"}}}
-        index = ServiceIndex(descriptions)
-        result = index.search("nonexistent")
-        assert 'No services found matching "nonexistent"' in result
-
-    def test_no_match_with_domain_filter(self) -> None:
-        descriptions = {"light": {"turn_on": {"description": "Turn on"}}}
-        index = ServiceIndex(descriptions)
-        result = index.search("toggle", domain="light")
-        assert 'No services found in domain "light" matching "toggle"' in result
-
-    def test_empty_index_any_query(self) -> None:
-        index = ServiceIndex({})
-        result = index.search("anything")
-        assert "No services found" in result
-
-
-class TestServiceIndexExplain:
-    """Tests for ServiceIndex.explain()."""
-
-    def test_known_service(self) -> None:
-        descriptions = {
-            "light": {
-                "turn_on": {
-                    "description": "Turn on a light",
-                    "fields": {
-                        "brightness": {
-                            "description": "Brightness level",
-                            "selector": {"number": {"min": 0, "max": 255}},
-                        },
-                    },
-                    "target": {"entity": {"domain": "light"}},
-                },
-            },
-        }
-        index = ServiceIndex(descriptions)
-        result = index.explain("light", "turn_on")
-        assert result is not None
-        assert "light.turn_on" in result
-        assert "Turn on a light" in result
-        assert "brightness" in result.lower()
-
-    def test_unknown_service(self) -> None:
-        descriptions = {"light": {"turn_on": {"description": "Turn on"}}}
-        index = ServiceIndex(descriptions)
-        result = index.explain("light", "nonexistent")
-        assert result is None
-
-    def test_unknown_domain(self) -> None:
-        descriptions = {"light": {"turn_on": {"description": "Turn on"}}}
-        index = ServiceIndex(descriptions)
-        result = index.explain("nonexistent", "turn_on")
-        assert result is None
-
-    def test_empty_index(self) -> None:
-        index = ServiceIndex({})
-        result = index.explain("light", "turn_on")
-        assert result is None
-
-    def test_service_with_sections(self) -> None:
-        descriptions = {
-            "light": {
-                "turn_on": {
-                    "description": "Turn on",
-                    "fields": {
-                        "advanced": {
-                            "name": "Advanced Options",
-                            "fields": {
-                                "transition": {"description": "Transition time"},
-                            },
-                        },
-                    },
-                },
-            },
-        }
-        index = ServiceIndex(descriptions)
-        result = index.explain("light", "turn_on")
-        assert result is not None
-        assert "Advanced Options" in result
-        assert "transition" in result
-
-
-class TestSelectorDescriptions:
-    """Tests for selector descriptions."""
-
-    def test_known_selector_has_description(self) -> None:
-        for selector_type in SELECTOR_DESCRIPTIONS:
-            desc = describe_selector(selector_type)
-            assert desc, f"Empty description for {selector_type}"
-            assert selector_type in desc
-
-    def test_unknown_selector_fallback(self) -> None:
-        result = describe_selector("unknown_selector_type")
-        assert "unknown_selector_type" in result
-        assert "Unknown" in result
-
-    def test_common_selectors_present(self) -> None:
-        expected = ["boolean", "text", "number", "entity", "target", "duration"]
-        for sel in expected:
-            assert sel in SELECTOR_DESCRIPTIONS
 
 
 class TestCallTool:
     """Tests for call_tool()."""
 
-    def _make_index(self) -> ServiceIndex:
-        return ServiceIndex(
+    def _make_registry(self) -> GroupRegistry:
+        """Create a registry with a services group."""
+        registry = GroupRegistry()
+        group = ServicesGroup(
             {
                 "light": {
                     "turn_on": {"description": "Turn on a light", "fields": {}},
@@ -240,87 +72,239 @@ class TestCallTool:
                 },
             }
         )
+        registry.register(group)
+        return registry
 
     def test_search_returns_done(self) -> None:
-        index = self._make_index()
-        result = call_tool("hamster_services_search", {"query": "light"}, index)
+        registry = self._make_registry()
+        result = call_tool("hamster_search", {"query": "light"}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.content[0].text  # type: ignore[union-attr]
 
-    def test_explain_returns_done(self) -> None:
-        index = self._make_index()
+    def test_search_with_path_filter(self) -> None:
+        registry = self._make_registry()
         result = call_tool(
-            "hamster_services_explain", {"domain": "light", "service": "turn_on"}, index
+            "hamster_search",
+            {"query": "turn", "path_filter": "services"},
+            registry,
+            user_id=None,
+        )
+        assert isinstance(result, Done)
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "turn_on" in text
+
+    def test_search_with_domain_filter(self) -> None:
+        registry = self._make_registry()
+        result = call_tool(
+            "hamster_search",
+            {"query": "turn", "path_filter": "services/light"},
+            registry,
+            user_id=None,
+        )
+        assert isinstance(result, Done)
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "light.turn_on" in text
+        # switch shouldn't be included with light domain filter
+        assert "switch" not in text
+
+    def test_explain_returns_done(self) -> None:
+        registry = self._make_registry()
+        result = call_tool(
+            "hamster_explain",
+            {"path": "services/light.turn_on"},
+            registry,
+            user_id=None,
         )
         assert isinstance(result, Done)
         assert not result.result.is_error
 
-    def test_explain_unknown_service_error(self) -> None:
-        index = self._make_index()
+    def test_explain_unknown_command_error(self) -> None:
+        registry = self._make_registry()
         result = call_tool(
-            "hamster_services_explain",
-            {"domain": "light", "service": "nonexistent"},
-            index,
+            "hamster_explain",
+            {"path": "services/light.nonexistent"},
+            registry,
+            user_id=None,
+        )
+        assert isinstance(result, Done)
+        assert result.result.is_error
+
+    def test_explain_unknown_group_error(self) -> None:
+        registry = self._make_registry()
+        result = call_tool(
+            "hamster_explain",
+            {"path": "unknown/foo"},
+            registry,
+            user_id=None,
+        )
+        assert isinstance(result, Done)
+        assert result.result.is_error
+
+    def test_explain_invalid_path_format_error(self) -> None:
+        registry = self._make_registry()
+        result = call_tool(
+            "hamster_explain",
+            {"path": "nogroup"},
+            registry,
+            user_id=None,
+        )
+        assert isinstance(result, Done)
+        assert result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "group/command" in text
+
+    def test_explain_empty_path_error(self) -> None:
+        registry = self._make_registry()
+        result = call_tool(
+            "hamster_explain",
+            {"path": ""},
+            registry,
+            user_id=None,
         )
         assert isinstance(result, Done)
         assert result.result.is_error
 
     def test_call_valid_service_returns_service_call(self) -> None:
-        index = self._make_index()
+        registry = self._make_registry()
         result = call_tool(
-            "hamster_services_call",
+            "hamster_call",
             {
-                "domain": "light",
-                "service": "turn_on",
-                "target": {"entity_id": ["light.living_room"]},
-                "data": {"brightness": 255},
+                "path": "services/light.turn_on",
+                "arguments": {
+                    "target": {"entity_id": ["light.living_room"]},
+                    "data": {"brightness": 255},
+                },
             },
-            index,
+            registry,
+            user_id=None,
         )
         assert isinstance(result, ServiceCall)
         assert result.domain == "light"
         assert result.service == "turn_on"
         assert result.target == {"entity_id": ["light.living_room"]}
         assert result.data == {"brightness": 255}
+        assert result.user_id is None
         assert isinstance(result.continuation, FormatServiceResponse)
 
     def test_call_unknown_service_error(self) -> None:
-        index = self._make_index()
+        registry = self._make_registry()
         result = call_tool(
-            "hamster_services_call",
-            {"domain": "light", "service": "nonexistent", "data": {}},
-            index,
+            "hamster_call",
+            {"path": "services/light.nonexistent", "arguments": {}},
+            registry,
+            user_id=None,
         )
         assert isinstance(result, Done)
         assert result.result.is_error
 
-    def test_search_empty_index(self) -> None:
-        index = ServiceIndex({})
-        result = call_tool("hamster_services_search", {"query": "anything"}, index)
-        assert isinstance(result, Done)
-        assert "No services found" in result.result.content[0].text  # type: ignore[union-attr]
-
-    def test_call_empty_index_error(self) -> None:
-        index = ServiceIndex({})
+    def test_call_unknown_group_error(self) -> None:
+        registry = self._make_registry()
         result = call_tool(
-            "hamster_services_call",
-            {"domain": "light", "service": "turn_on", "data": {}},
-            index,
+            "hamster_call",
+            {"path": "unknown/foo", "arguments": {}},
+            registry,
+            user_id=None,
         )
         assert isinstance(result, Done)
         assert result.result.is_error
+
+    def test_call_invalid_path_format_error(self) -> None:
+        registry = self._make_registry()
+        result = call_tool(
+            "hamster_call",
+            {"path": "nogroup"},
+            registry,
+            user_id=None,
+        )
+        assert isinstance(result, Done)
+        assert result.result.is_error
+
+    def test_call_missing_arguments_uses_empty(self) -> None:
+        registry = self._make_registry()
+        result = call_tool(
+            "hamster_call",
+            {"path": "services/light.turn_on"},
+            registry,
+            user_id="test-user",
+        )
+        assert isinstance(result, ServiceCall)
+        assert result.data == {}
+        assert result.user_id == "test-user"
+
+    def test_call_arguments_wrong_type_error(self) -> None:
+        registry = self._make_registry()
+        result = call_tool(
+            "hamster_call",
+            {"path": "services/light.turn_on", "arguments": "invalid"},
+            registry,
+            user_id=None,
+        )
+        assert isinstance(result, Done)
+        assert result.result.is_error
+
+    def test_search_empty_registry(self) -> None:
+        registry = GroupRegistry()
+        result = call_tool(
+            "hamster_search", {"query": "anything"}, registry, user_id=None
+        )
+        assert isinstance(result, Done)
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "No commands found" in text
 
     def test_schema_returns_done(self) -> None:
-        index = self._make_index()
+        registry = self._make_registry()
         result = call_tool(
-            "hamster_services_schema", {"selector_type": "boolean"}, index
+            "hamster_schema",
+            {"path": "services/selector/boolean"},
+            registry,
+            user_id=None,
         )
         assert isinstance(result, Done)
-        assert "boolean" in result.result.content[0].text  # type: ignore[union-attr]
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "boolean" in text
+
+    def test_schema_service_fields(self) -> None:
+        registry = GroupRegistry()
+        group = ServicesGroup(
+            {
+                "light": {
+                    "turn_on": {
+                        "description": "Turn on",
+                        "fields": {
+                            "brightness": {
+                                "description": "Brightness level",
+                                "selector": {"number": {}},
+                            }
+                        },
+                    },
+                },
+            }
+        )
+        registry.register(group)
+        result = call_tool(
+            "hamster_schema",
+            {"path": "services/light.turn_on"},
+            registry,
+            user_id=None,
+        )
+        assert isinstance(result, Done)
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "brightness" in text
+
+    def test_schema_unknown_path_error(self) -> None:
+        registry = self._make_registry()
+        result = call_tool(
+            "hamster_schema",
+            {"path": "services/unknown.service"},
+            registry,
+            user_id=None,
+        )
+        assert isinstance(result, Done)
+        assert result.result.is_error
 
     def test_unknown_tool_error(self) -> None:
-        index = self._make_index()
-        result = call_tool("unknown_tool", {}, index)
+        registry = self._make_registry()
+        result = call_tool("unknown_tool", {}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
@@ -328,71 +312,68 @@ class TestCallTool:
 class TestCallToolArgumentValidation:
     """Tests for argument validation in call_tool()."""
 
-    def _make_index(self) -> ServiceIndex:
-        return ServiceIndex({"light": {"turn_on": {"description": "Turn on"}}})
+    def _make_registry(self) -> GroupRegistry:
+        registry = GroupRegistry()
+        group = ServicesGroup({"light": {"turn_on": {"description": "Turn on"}}})
+        registry.register(group)
+        return registry
 
     def test_search_missing_query(self) -> None:
-        index = self._make_index()
-        result = call_tool("hamster_services_search", {}, index)
+        registry = self._make_registry()
+        result = call_tool("hamster_search", {}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
     def test_search_query_wrong_type(self) -> None:
-        index = self._make_index()
-        result = call_tool("hamster_services_search", {"query": 123}, index)
+        registry = self._make_registry()
+        result = call_tool("hamster_search", {"query": 123}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
-    def test_explain_missing_domain(self) -> None:
-        index = self._make_index()
-        result = call_tool("hamster_services_explain", {"service": "turn_on"}, index)
-        assert isinstance(result, Done)
-        assert result.result.is_error
-
-    def test_explain_missing_service(self) -> None:
-        index = self._make_index()
-        result = call_tool("hamster_services_explain", {"domain": "light"}, index)
-        assert isinstance(result, Done)
-        assert result.result.is_error
-
-    def test_call_missing_domain(self) -> None:
-        index = self._make_index()
+    def test_search_path_filter_wrong_type(self) -> None:
+        registry = self._make_registry()
         result = call_tool(
-            "hamster_services_call", {"service": "turn_on", "data": {}}, index
+            "hamster_search",
+            {"query": "test", "path_filter": 123},
+            registry,
+            user_id=None,
         )
         assert isinstance(result, Done)
         assert result.result.is_error
 
-    def test_call_missing_service(self) -> None:
-        index = self._make_index()
-        result = call_tool(
-            "hamster_services_call", {"domain": "light", "data": {}}, index
-        )
+    def test_explain_missing_path(self) -> None:
+        registry = self._make_registry()
+        result = call_tool("hamster_explain", {}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
-    def test_call_missing_data_uses_empty(self) -> None:
-        index = self._make_index()
-        result = call_tool(
-            "hamster_services_call", {"domain": "light", "service": "turn_on"}, index
-        )
-        # Should succeed and use empty data
-        assert isinstance(result, ServiceCall)
-        assert result.data == {}
-
-    def test_call_target_wrong_type(self) -> None:
-        index = self._make_index()
-        result = call_tool(
-            "hamster_services_call",
-            {"domain": "light", "service": "turn_on", "target": "invalid"},
-            index,
-        )
+    def test_explain_path_wrong_type(self) -> None:
+        registry = self._make_registry()
+        result = call_tool("hamster_explain", {"path": 123}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
-    def test_schema_missing_selector_type(self) -> None:
-        index = self._make_index()
-        result = call_tool("hamster_services_schema", {}, index)
+    def test_call_missing_path(self) -> None:
+        registry = self._make_registry()
+        result = call_tool("hamster_call", {}, registry, user_id=None)
+        assert isinstance(result, Done)
+        assert result.result.is_error
+
+    def test_call_path_wrong_type(self) -> None:
+        registry = self._make_registry()
+        result = call_tool("hamster_call", {"path": 123}, registry, user_id=None)
+        assert isinstance(result, Done)
+        assert result.result.is_error
+
+    def test_schema_missing_path(self) -> None:
+        registry = self._make_registry()
+        result = call_tool("hamster_schema", {}, registry, user_id=None)
+        assert isinstance(result, Done)
+        assert result.result.is_error
+
+    def test_schema_path_wrong_type(self) -> None:
+        registry = self._make_registry()
+        result = call_tool("hamster_schema", {"path": 123}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
@@ -424,3 +405,140 @@ class TestResume:
         assert result.result.is_error
         text = result.result.content[0].text  # type: ignore[union-attr]
         assert "Service not found" in text
+
+
+class TestResumeHassResponse:
+    """Tests for resume() with FormatHassResponse continuation."""
+
+    def test_success_with_dict_data(self) -> None:
+        """Success result formats dict data as JSON text."""
+        io_result = HassCommandResult(success=True, data={"states": ["on", "off"]})
+        result = resume(FormatHassResponse(), io_result)
+        assert isinstance(result, Done)
+        assert not result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "states" in text
+        assert "on" in text
+
+    def test_success_with_list_data(self) -> None:
+        """Success result formats list data as JSON text."""
+        io_result = HassCommandResult(success=True, data=[1, 2, 3])
+        result = resume(FormatHassResponse(), io_result)
+        assert isinstance(result, Done)
+        assert not result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "1" in text
+        assert "2" in text
+        assert "3" in text
+
+    def test_success_with_string_data(self) -> None:
+        """Success result formats string data as JSON text."""
+        io_result = HassCommandResult(success=True, data="result value")
+        result = resume(FormatHassResponse(), io_result)
+        assert isinstance(result, Done)
+        assert not result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "result value" in text
+
+    def test_success_with_none_data(self) -> None:
+        """Success result with None data returns success message."""
+        io_result = HassCommandResult(success=True, data=None)
+        result = resume(FormatHassResponse(), io_result)
+        assert isinstance(result, Done)
+        assert not result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "success" in text.lower() or "completed" in text.lower()
+
+    def test_error_result(self) -> None:
+        """Error result returns Done with is_error=True."""
+        io_result = HassCommandResult(success=False, error="Unknown command")
+        result = resume(FormatHassResponse(), io_result)
+        assert isinstance(result, Done)
+        assert result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "Unknown command" in text
+
+
+class TestResumeSupervisorResponse:
+    """Tests for resume() with FormatSupervisorResponse continuation."""
+
+    def test_success_with_dict_data(self) -> None:
+        """Success result formats dict data as JSON text."""
+        io_result = SupervisorCallResult(
+            success=True, data={"version": "2024.1", "hostname": "homeassistant"}
+        )
+        result = resume(FormatSupervisorResponse(), io_result)
+        assert isinstance(result, Done)
+        assert not result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "version" in text
+        assert "2024.1" in text
+        assert "hostname" in text
+
+    def test_success_with_string_data(self) -> None:
+        """Success result with string data (logs) returns text directly."""
+        io_result = SupervisorCallResult(
+            success=True, data="Log line 1\nLog line 2\nLog line 3"
+        )
+        result = resume(FormatSupervisorResponse(), io_result)
+        assert isinstance(result, Done)
+        assert not result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "Log line 1" in text
+        assert "Log line 2" in text
+        assert "Log line 3" in text
+
+    def test_success_with_logs_dict(self) -> None:
+        """Success result with logs wrapped in dict."""
+        io_result = SupervisorCallResult(
+            success=True, data={"logs": "2024-01-01 INFO Starting..."}
+        )
+        result = resume(FormatSupervisorResponse(), io_result)
+        assert isinstance(result, Done)
+        assert not result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "logs" in text
+        assert "Starting" in text
+
+    def test_success_with_none_data(self) -> None:
+        """Success result with None data returns success message."""
+        io_result = SupervisorCallResult(success=True, data=None)
+        result = resume(FormatSupervisorResponse(), io_result)
+        assert isinstance(result, Done)
+        assert not result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "success" in text.lower() or "completed" in text.lower()
+
+    def test_error_result(self) -> None:
+        """Error result returns Done with is_error=True."""
+        io_result = SupervisorCallResult(
+            success=False, error="Supervisor not available"
+        )
+        result = resume(FormatSupervisorResponse(), io_result)
+        assert isinstance(result, Done)
+        assert result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "Supervisor not available" in text
+
+    def test_error_with_api_error(self) -> None:
+        """Error result includes API error message."""
+        io_result = SupervisorCallResult(
+            success=False, error="API Error: 401 Unauthorized"
+        )
+        result = resume(FormatSupervisorResponse(), io_result)
+        assert isinstance(result, Done)
+        assert result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "401" in text
+        assert "Unauthorized" in text
+
+    def test_error_requires_admin(self) -> None:
+        """Error result for admin required."""
+        io_result = SupervisorCallResult(
+            success=False, error="Supervisor access requires admin privileges"
+        )
+        result = resume(FormatSupervisorResponse(), io_result)
+        assert isinstance(result, Done)
+        assert result.result.is_error
+        text = result.result.content[0].text  # type: ignore[union-attr]
+        assert "admin" in text.lower()

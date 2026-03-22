@@ -14,6 +14,7 @@ import secrets
 from typing import TYPE_CHECKING
 
 from .events import ReceiveResult, RunEffects, SendResponse, SessionExpired, ToolEffect
+from .groups import GroupRegistry, ServicesGroup
 from .jsonrpc import (
     INVALID_PARAMS,
     INVALID_REQUEST,
@@ -31,7 +32,7 @@ from .jsonrpc import (
     make_error_response,
     parse_batch,
 )
-from .tools import TOOLS, ServiceIndex, call_tool
+from .tools import TOOLS, call_tool
 from .types import CallToolResult, JsonRpcId, ServerCapabilities, ServerInfo
 
 if TYPE_CHECKING:
@@ -109,13 +110,15 @@ class MCPServerSession:
     def handle(
         self,
         message: JsonRpcRequest | JsonRpcNotification,
-        index: ServiceIndex,
+        registry: GroupRegistry,
+        user_id: str | None,
     ) -> SessionResult:
         """Handle a JSON-RPC message.
 
         Args:
             message: Parsed JSON-RPC request or notification
-            index: Current service index for tool calls
+            registry: Group registry for tool calls
+            user_id: Authenticated user ID for authorization
 
         Returns:
             SessionResult indicating what to do
@@ -144,7 +147,7 @@ class MCPServerSession:
         if self._state == SessionState.INITIALIZING:
             return self._handle_initializing(message)
         if self._state == SessionState.ACTIVE:
-            return self._handle_active(message, index)
+            return self._handle_active(message, registry, user_id)
 
         # Should not reach here
         return SessionError(  # pragma: no cover
@@ -213,7 +216,8 @@ class MCPServerSession:
     def _handle_active(
         self,
         message: JsonRpcRequest | JsonRpcNotification,
-        index: ServiceIndex,
+        registry: GroupRegistry,
+        user_id: str | None,
     ) -> SessionResult:
         """Handle messages in ACTIVE state."""
         method = message.method
@@ -227,7 +231,7 @@ class MCPServerSession:
             return SessionResponse(body=build_tool_list_response(message.id, TOOLS))
 
         if method == "tools/call":
-            return self._handle_tools_call(message, index)
+            return self._handle_tools_call(message, registry, user_id)
 
         # Unknown method
         return SessionError(
@@ -239,7 +243,8 @@ class MCPServerSession:
     def _handle_tools_call(
         self,
         message: JsonRpcRequest,
-        index: ServiceIndex,
+        registry: GroupRegistry,
+        user_id: str | None,
     ) -> SessionResult:
         """Handle tools/call request."""
         params = message.params
@@ -274,7 +279,7 @@ class MCPServerSession:
             )
 
         # Dispatch to tool
-        effect = call_tool(name, arguments, index)
+        effect = call_tool(name, arguments, registry, user_id)
         return SessionToolCall(request_id=message.id, effect=effect)
 
     def close(self) -> None:
@@ -324,14 +329,22 @@ class SessionManager:
 
         self._sessions: dict[str, MCPServerSession] = {}
         self._last_activity: dict[str, float] = {}
-        self._index = ServiceIndex({})
+        self._registry = GroupRegistry()
 
         # Debounce state for service index regeneration
         self._services_changed_at: float | None = None
 
-    def update_index(self, index: ServiceIndex) -> None:
-        """Replace the service index."""
-        self._index = index
+    def update_registry(self, registry: GroupRegistry) -> None:
+        """Replace the group registry."""
+        self._registry = registry
+        self._services_changed_at = None  # Clear pending regeneration
+
+    def update_services_group(self, services_group: ServicesGroup) -> None:
+        """Update just the services group within the existing registry.
+
+        Used for service event handling where only the services group changes.
+        """
+        self._registry.update_group(services_group)
         self._services_changed_at = None  # Clear pending regeneration
 
     def notify_services_changed(self, now: float) -> None:
@@ -417,8 +430,8 @@ class SessionManager:
         parsed = parse_batch(body)
 
         if isinstance(parsed, list):
-            return self._handle_batch(parsed, request.session_id, now)
-        return self._handle_single(parsed, request.session_id, now)
+            return self._handle_batch(parsed, request.session_id, now, request.user_id)
+        return self._handle_single(parsed, request.session_id, now, request.user_id)
 
     def _handle_delete(self, request: IncomingRequest) -> SendResponse:
         """Handle DELETE request (session termination)."""
@@ -481,6 +494,7 @@ class SessionManager:
         | JsonRpcParseError,
         session_id: str | None,
         now: float,
+        user_id: str | None,
     ) -> ReceiveResult:
         """Handle a single JSON-RPC message."""
         # Handle parse errors
@@ -500,7 +514,7 @@ class SessionManager:
             )
 
         # Route message
-        return self._route_message(parsed, session_id, now)
+        return self._route_message(parsed, session_id, now, user_id)
 
     def _handle_batch(
         self,
@@ -509,6 +523,7 @@ class SessionManager:
         ],
         session_id: str | None,
         now: float,
+        user_id: str | None,
     ) -> ReceiveResult | list[ReceiveResult]:
         """Handle a batch of JSON-RPC messages."""
         # Check for initialize in batch (not allowed)
@@ -524,7 +539,7 @@ class SessionManager:
 
         results: list[ReceiveResult] = []
         for parsed in parsed_list:
-            result = self._handle_single(parsed, session_id, now)
+            result = self._handle_single(parsed, session_id, now, user_id)
             # Notifications don't get responses in batch
             if (
                 isinstance(parsed, JsonRpcNotification)
@@ -545,12 +560,13 @@ class SessionManager:
         message: JsonRpcRequest | JsonRpcNotification,
         session_id: str | None,
         now: float,
+        user_id: str | None,
     ) -> ReceiveResult:
         """Route a message to the appropriate session."""
         if session_id is None:
             # No session - must be initialize
             if message.method == "initialize":
-                return self._create_session_and_handle(message, now)
+                return self._create_session_and_handle(message, now, user_id)
             return SendResponse(
                 status=400,
                 headers={"Content-Type": "application/json"},
@@ -578,7 +594,7 @@ class SessionManager:
         self._last_activity[session_id] = now
 
         # Delegate to session
-        result = session.handle(message, self._index)
+        result = session.handle(message, self._registry, user_id)
         return self._wrap_session_result(
             result, session_id=None
         )  # No header on non-init
@@ -587,6 +603,7 @@ class SessionManager:
         self,
         message: JsonRpcRequest | JsonRpcNotification,
         now: float,
+        user_id: str | None,
     ) -> ReceiveResult:
         """Create a new session and handle the initialize request."""
         # Generate session ID
@@ -602,7 +619,7 @@ class SessionManager:
         self._last_activity[session_id] = now
 
         # Handle the initialize request
-        result = session.handle(message, self._index)
+        result = session.handle(message, self._registry, user_id)
         return self._wrap_session_result(result, session_id=session_id)
 
     def _is_valid_session_id(self, session_id: str) -> bool:
