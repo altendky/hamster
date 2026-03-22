@@ -25,8 +25,24 @@ class FormatServiceResponse:
     """
 
 
+@dataclass(frozen=True, slots=True)
+class FormatHassResponse:
+    """Format the raw WebSocket command response into MCP content.
+
+    Continuation type for hass command results.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class FormatSupervisorResponse:
+    """Format the raw Supervisor API response into MCP content.
+
+    Continuation type for supervisor call results.
+    """
+
+
 # Continuation union - grows as new continuation types are added
-Continuation = FormatServiceResponse
+Continuation = FormatServiceResponse | FormatHassResponse | FormatSupervisorResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,11 +60,33 @@ class ServiceCall:
     service: str
     target: dict[str, object] | None
     data: dict[str, object]
+    user_id: str | None
+    continuation: Continuation
+
+
+@dataclass(frozen=True, slots=True)
+class HassCommand:
+    """Request to execute a WebSocket command."""
+
+    command_type: str
+    params: dict[str, object]
+    user_id: str | None
+    continuation: Continuation
+
+
+@dataclass(frozen=True, slots=True)
+class SupervisorCall:
+    """Request to execute a Supervisor API call."""
+
+    method: str  # HTTP method: "GET", "POST", etc.
+    path: str  # API path, e.g., "/core/logs"
+    params: dict[str, object]  # Query params (GET) or body (POST)
+    user_id: str | None
     continuation: Continuation
 
 
 # ToolEffect union - what call_tool() and resume() return
-ToolEffect = Done | ServiceCall
+ToolEffect = Done | ServiceCall | HassCommand | SupervisorCall
 
 
 # --- Group 2: Request result types ---

@@ -101,6 +101,32 @@ class ServiceCallResult:
 
 
 @dataclass(frozen=True, slots=True)
+class HassCommandResult:
+    """Result from executing a WebSocket command.
+
+    Returned by EffectHandler.execute_hass_command(), consumed by resume().
+    Handler results can be any JSON type, not just dict.
+    """
+
+    success: bool
+    data: object = None  # Handler results can be any JSON type, not just dict
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SupervisorCallResult:
+    """Result from executing a Supervisor API call.
+
+    Returned by EffectHandler.execute_supervisor_call(), consumed by resume().
+    Response data can be dict (JSON responses) or str (log content).
+    """
+
+    success: bool
+    data: object = None  # Could be dict, str (logs), etc.
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class IncomingRequest:
     """Framework-agnostic representation of an HTTP request.
 
@@ -116,3 +142,4 @@ class IncomingRequest:
     host: str  # From Host header
     session_id: str | None  # From Mcp-Session-Id header
     body: bytes  # Raw request body
+    user_id: str | None = None  # Authenticated user ID for authorization

@@ -176,7 +176,7 @@ class TestFullMCPFlow:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_services_search",
+                    "name": "hamster_search",
                     "arguments": {"query": "light"},
                 },
             ),
@@ -230,12 +230,13 @@ class TestFullMCPFlow:
                 json=_make_jsonrpc(
                     "tools/call",
                     {
-                        "name": "hamster_services_call",
+                        "name": "hamster_call",
                         "arguments": {
-                            "domain": "light",
-                            "service": "turn_on",
-                            "target": {"entity_id": ["light.living_room"]},
-                            "data": {"brightness": 255},
+                            "path": "services/light.turn_on",
+                            "arguments": {
+                                "target": {"entity_id": ["light.living_room"]},
+                                "data": {"brightness": 255},
+                            },
                         },
                     },
                 ),
@@ -262,7 +263,7 @@ class TestFullMCPFlow:
         self,
         http_client: TestClient[web.Request, web.Application],
     ) -> None:
-        """Test hamster_services_explain tool."""
+        """Test hamster_explain tool."""
         session_id = await _init_session(http_client)
 
         resp = await http_client.post(
@@ -270,8 +271,8 @@ class TestFullMCPFlow:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_services_explain",
-                    "arguments": {"domain": "light", "service": "turn_on"},
+                    "name": "hamster_explain",
+                    "arguments": {"path": "services/light.turn_on"},
                 },
             ),
             headers={
@@ -290,7 +291,7 @@ class TestFullMCPFlow:
         self,
         http_client: TestClient[web.Request, web.Application],
     ) -> None:
-        """Test hamster_services_schema tool."""
+        """Test hamster_schema tool."""
         session_id = await _init_session(http_client)
 
         resp = await http_client.post(
@@ -298,8 +299,8 @@ class TestFullMCPFlow:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_services_schema",
-                    "arguments": {"selector_type": "boolean"},
+                    "name": "hamster_schema",
+                    "arguments": {"path": "services/selector/boolean"},
                 },
             ),
             headers={

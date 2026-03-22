@@ -9,6 +9,7 @@ import pytest
 from hamster.mcp._core.types import (
     CallToolResult,
     Content,
+    HassCommandResult,
     ImageContent,
     IncomingRequest,
     JsonRpcId,
@@ -180,6 +181,51 @@ class TestServiceCallResult:
 
     def test_frozen(self) -> None:
         result = ServiceCallResult(success=True)
+        with pytest.raises(FrozenInstanceError):
+            result.success = False  # type: ignore[misc]
+
+
+class TestHassCommandResult:
+    """Tests for HassCommandResult dataclass."""
+
+    def test_success_with_dict_data(self) -> None:
+        """Success with dict data."""
+        result = HassCommandResult(success=True, data={"states": []})
+        assert result.success is True
+        assert result.data == {"states": []}
+        assert result.error is None
+
+    def test_success_with_list_data(self) -> None:
+        """Success with list data (handler results can be any JSON type)."""
+        result = HassCommandResult(success=True, data=[1, 2, 3])
+        assert result.success is True
+        assert result.data == [1, 2, 3]
+        assert result.error is None
+
+    def test_success_with_string_data(self) -> None:
+        """Success with string data."""
+        result = HassCommandResult(success=True, data="result string")
+        assert result.success is True
+        assert result.data == "result string"
+        assert result.error is None
+
+    def test_success_with_none_data(self) -> None:
+        """Success with None data (default)."""
+        result = HassCommandResult(success=True)
+        assert result.success is True
+        assert result.data is None
+        assert result.error is None
+
+    def test_error_case(self) -> None:
+        """Error case with message."""
+        result = HassCommandResult(success=False, error="Unknown command")
+        assert result.success is False
+        assert result.data is None
+        assert result.error == "Unknown command"
+
+    def test_frozen(self) -> None:
+        """HassCommandResult is frozen."""
+        result = HassCommandResult(success=True)
         with pytest.raises(FrozenInstanceError):
             result.success = False  # type: ignore[misc]
 

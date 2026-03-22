@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 from hamster.mcp._core.events import RunEffects, SendResponse
+from hamster.mcp._core.groups import GroupRegistry, ServicesGroup
 from hamster.mcp._core.jsonrpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND
 from hamster.mcp._core.session import (
     MCPServerSession,
@@ -21,7 +22,6 @@ from hamster.mcp._core.session import (
     SessionState,
     SessionToolCall,
 )
-from hamster.mcp._core.tools import ServiceIndex
 from hamster.mcp._core.types import (
     CallToolResult,
     IncomingRequest,
@@ -42,6 +42,7 @@ def make_request(
     origin: str | None = None,
     host: str = "localhost:8123",
     session_id: str | None = None,
+    user_id: str | None = None,
 ) -> IncomingRequest:
     """Create an IncomingRequest for testing."""
     if body is None:
@@ -59,6 +60,7 @@ def make_request(
         host=host,
         session_id=session_id,
         body=body_bytes,
+        user_id=user_id,
     )
 
 
@@ -101,10 +103,10 @@ class TestMCPServerSessionState:
 
         info = ServerInfo(name="test", version="1.0")
         session = MCPServerSession(info, ServerCapabilities())
-        index = ServiceIndex({})
+        registry = GroupRegistry()
 
         msg = JsonRpcRequest(id=1, method="ping", params={})
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionResponse)
         assert result.body["result"] == {}
 
@@ -113,10 +115,10 @@ class TestMCPServerSessionState:
 
         info = ServerInfo(name="test", version="1.0")
         session = MCPServerSession(info, ServerCapabilities())
-        index = ServiceIndex({})
+        registry = GroupRegistry()
 
         msg = JsonRpcRequest(id=1, method="tools/list", params={})
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionError)
         assert result.code == INVALID_REQUEST
 
@@ -125,12 +127,12 @@ class TestMCPServerSessionState:
 
         info = ServerInfo(name="test", version="1.0")
         session = MCPServerSession(info, ServerCapabilities())
-        index = ServiceIndex({})
+        registry = GroupRegistry()
 
         msg = JsonRpcRequest(
             id=1, method="initialize", params={"protocolVersion": "2025-03-26"}
         )
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionResponse)
         assert session.state == SessionState.INITIALIZING
 
@@ -139,17 +141,17 @@ class TestMCPServerSessionState:
 
         info = ServerInfo(name="test", version="1.0")
         session = MCPServerSession(info, ServerCapabilities())
-        index = ServiceIndex({})
+        registry = GroupRegistry()
 
         # Initialize
         msg1 = JsonRpcRequest(
             id=1, method="initialize", params={"protocolVersion": "2025-03-26"}
         )
-        session.handle(msg1, index)
+        session.handle(msg1, registry, user_id=None)
 
         # Send initialized notification
         msg2 = JsonRpcNotification(method="notifications/initialized", params={})
-        result = session.handle(msg2, index)
+        result = session.handle(msg2, registry, user_id=None)
         assert isinstance(result, SessionAck)
         assert session.state == SessionState.ACTIVE
 
@@ -158,18 +160,18 @@ class TestMCPServerSessionState:
 
         info = ServerInfo(name="test", version="1.0")
         session = MCPServerSession(info, ServerCapabilities())
-        index = ServiceIndex({})
+        registry = GroupRegistry()
 
         # Initialize
         msg1 = JsonRpcRequest(
             id=1, method="initialize", params={"protocolVersion": "2025-03-26"}
         )
-        session.handle(msg1, index)
+        session.handle(msg1, registry, user_id=None)
         assert session.state == SessionState.INITIALIZING
 
         # Ping should work
         msg2 = JsonRpcRequest(id=2, method="ping", params={})
-        result = session.handle(msg2, index)
+        result = session.handle(msg2, registry, user_id=None)
         assert isinstance(result, SessionResponse)
 
     def test_ping_in_active(self) -> None:
@@ -177,21 +179,26 @@ class TestMCPServerSessionState:
 
         info = ServerInfo(name="test", version="1.0")
         session = MCPServerSession(info, ServerCapabilities())
-        index = ServiceIndex({})
+        registry = GroupRegistry()
 
         # Full init sequence
         session.handle(
             JsonRpcRequest(
                 id=1, method="initialize", params={"protocolVersion": "2025-03-26"}
             ),
-            index,
+            registry,
+            user_id=None,
         )
         session.handle(
-            JsonRpcNotification(method="notifications/initialized", params={}), index
+            JsonRpcNotification(method="notifications/initialized", params={}),
+            registry,
+            user_id=None,
         )
 
         # Ping
-        result = session.handle(JsonRpcRequest(id=2, method="ping", params={}), index)
+        result = session.handle(
+            JsonRpcRequest(id=2, method="ping", params={}), registry, user_id=None
+        )
         assert isinstance(result, SessionResponse)
 
     def test_close_transitions_to_closed(self) -> None:
@@ -205,11 +212,11 @@ class TestMCPServerSessionState:
 
         info = ServerInfo(name="test", version="1.0")
         session = MCPServerSession(info, ServerCapabilities())
-        index = ServiceIndex({})
+        registry = GroupRegistry()
         session.close()
 
         msg = JsonRpcRequest(id=1, method="ping", params={})
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionError)
 
 
@@ -221,12 +228,12 @@ class TestMCPServerSessionVersionNegotiation:
 
         info = ServerInfo(name="test", version="1.0")
         session = MCPServerSession(info, ServerCapabilities())
-        index = ServiceIndex({})
+        registry = GroupRegistry()
 
         msg = JsonRpcRequest(
             id=1, method="initialize", params={"protocolVersion": "2025-03-26"}
         )
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionResponse)
         inner = result.body["result"]
         assert isinstance(inner, dict)
@@ -237,12 +244,12 @@ class TestMCPServerSessionVersionNegotiation:
 
         info = ServerInfo(name="test", version="1.0")
         session = MCPServerSession(info, ServerCapabilities())
-        index = ServiceIndex({})
+        registry = GroupRegistry()
 
         msg = JsonRpcRequest(
             id=1, method="initialize", params={"protocolVersion": "9999-01-01"}
         )
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionResponse)
         # Should return server's preferred version
         inner = result.body["result"]
@@ -254,10 +261,10 @@ class TestMCPServerSessionVersionNegotiation:
 
         info = ServerInfo(name="test", version="1.0")
         session = MCPServerSession(info, ServerCapabilities())
-        index = ServiceIndex({})
+        registry = GroupRegistry()
 
         msg = JsonRpcRequest(id=1, method="initialize", params={})
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionError)
         assert result.code == INVALID_PARAMS
 
@@ -265,74 +272,79 @@ class TestMCPServerSessionVersionNegotiation:
 class TestMCPServerSessionToolsCall:
     """Tests for tools/call handling."""
 
-    def _make_active_session(self) -> tuple[MCPServerSession, ServiceIndex]:
+    def _make_active_session(self) -> tuple[MCPServerSession, GroupRegistry]:
         from hamster.mcp._core.jsonrpc import JsonRpcNotification, JsonRpcRequest
 
         info = ServerInfo(name="test", version="1.0")
         session = MCPServerSession(info, ServerCapabilities())
-        index = ServiceIndex({"light": {"turn_on": {"description": "Turn on"}}})
+        registry = GroupRegistry()
+        group = ServicesGroup({"light": {"turn_on": {"description": "Turn on"}}})
+        registry.register(group)
 
         session.handle(
             JsonRpcRequest(
                 id=1, method="initialize", params={"protocolVersion": "2025-03-26"}
             ),
-            index,
+            registry,
+            user_id=None,
         )
         session.handle(
-            JsonRpcNotification(method="notifications/initialized", params={}), index
+            JsonRpcNotification(method="notifications/initialized", params={}),
+            registry,
+            user_id=None,
         )
-        return session, index
+        return session, registry
 
     def test_valid_tool_call(self) -> None:
         from hamster.mcp._core.jsonrpc import JsonRpcRequest
 
-        session, index = self._make_active_session()
+        session, registry = self._make_active_session()
         msg = JsonRpcRequest(
             id=2,
             method="tools/call",
-            params={"name": "hamster_services_search", "arguments": {"query": "light"}},
+            params={"name": "hamster_search", "arguments": {"query": "light"}},
         )
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionToolCall)
         assert result.request_id == 2
 
     def test_missing_name_error(self) -> None:
         from hamster.mcp._core.jsonrpc import JsonRpcRequest
 
-        session, index = self._make_active_session()
+        session, registry = self._make_active_session()
         msg = JsonRpcRequest(id=2, method="tools/call", params={"arguments": {}})
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionError)
         assert result.code == INVALID_PARAMS
 
     def test_missing_arguments_uses_empty(self) -> None:
         from hamster.mcp._core.jsonrpc import JsonRpcRequest
 
-        session, index = self._make_active_session()
+        session, registry = self._make_active_session()
         msg = JsonRpcRequest(
-            id=2, method="tools/call", params={"name": "hamster_services_search"}
+            id=2, method="tools/call", params={"name": "hamster_search"}
         )
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         # Should still work - arguments defaults to {}
         assert isinstance(result, SessionToolCall)
 
     def test_unknown_tool_error(self) -> None:
         from hamster.mcp._core.jsonrpc import JsonRpcRequest
 
-        session, index = self._make_active_session()
+        session, registry = self._make_active_session()
         msg = JsonRpcRequest(
             id=2, method="tools/call", params={"name": "unknown_tool", "arguments": {}}
         )
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionError)
         assert result.code == INVALID_PARAMS
 
     def test_unknown_method_error(self) -> None:
         from hamster.mcp._core.jsonrpc import JsonRpcRequest
 
-        session, index = self._make_active_session()
+        session, registry = self._make_active_session()
         msg = JsonRpcRequest(id=2, method="unknown/method", params={})
-        result = session.handle(msg, index)
+        result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionError)
         assert result.code == METHOD_NOT_FOUND
 
@@ -635,14 +647,16 @@ class TestSessionManagerRouting:
         assert r2.headers["Mcp-Session-Id"] == "sess-2"
 
 
-class TestSessionManagerIndex:
-    """Tests for service index management."""
+class TestSessionManagerRegistry:
+    """Tests for group registry management."""
 
-    def test_update_index(self) -> None:
+    def test_update_registry(self) -> None:
         manager = SessionManager(ServerInfo(name="test", version="1.0"))
-        index = ServiceIndex({"light": {"turn_on": {"description": "Turn on"}}})
-        manager.update_index(index)
-        # Index is internal, just verify no error
+        registry = GroupRegistry()
+        group = ServicesGroup({"light": {"turn_on": {"description": "Turn on"}}})
+        registry.register(group)
+        manager.update_registry(registry)
+        # Registry is internal, just verify no error
 
 
 class TestSessionManagerToolCallParams:
@@ -697,7 +711,7 @@ class TestSessionManagerToolCallParams:
     def test_arguments_wrong_type(self) -> None:
         manager, sess = self._make_active_manager()
         body = make_jsonrpc_request(
-            "tools/call", {"name": "hamster_services_search", "arguments": "string"}
+            "tools/call", {"name": "hamster_search", "arguments": "string"}
         )
         result = manager.receive_request(
             make_request(body=body, session_id=sess), now=0.0
@@ -869,9 +883,10 @@ class TestSessionManagerConcurrency:
             ServerInfo(name="test", version="1.0"),
             session_id_factory=lambda: "sess",
         )
-        manager.update_index(
-            ServiceIndex({"light": {"turn_on": {"description": "Turn on"}}})
-        )
+        registry = GroupRegistry()
+        group = ServicesGroup({"light": {"turn_on": {"description": "Turn on"}}})
+        registry.register(group)
+        manager.update_registry(registry)
 
         body = make_jsonrpc_request("initialize", {"protocolVersion": "2025-03-26"})
         manager.receive_request(make_request(body=body), now=0.0)
@@ -887,16 +902,16 @@ class TestSessionManagerConcurrency:
         body1 = make_jsonrpc_request(
             "tools/call",
             {
-                "name": "hamster_services_call",
-                "arguments": {"domain": "light", "service": "turn_on"},
+                "name": "hamster_call",
+                "arguments": {"path": "services/light.turn_on"},
             },
             request_id=1,
         )
         body2 = make_jsonrpc_request(
             "tools/call",
             {
-                "name": "hamster_services_call",
-                "arguments": {"domain": "light", "service": "turn_on"},
+                "name": "hamster_call",
+                "arguments": {"path": "services/light.turn_on"},
             },
             request_id=2,
         )
@@ -964,9 +979,10 @@ class TestHappyPath:
             ServerInfo(name="hamster", version="1.0.0"),
             session_id_factory=lambda: "test-session-id",
         )
-        manager.update_index(
-            ServiceIndex({"light": {"turn_on": {"description": "Turn on"}}})
-        )
+        registry = GroupRegistry()
+        group = ServicesGroup({"light": {"turn_on": {"description": "Turn on"}}})
+        registry.register(group)
+        manager.update_registry(registry)
 
         # 1. Initialize
         init_body = make_jsonrpc_request(
@@ -1000,7 +1016,7 @@ class TestHappyPath:
         # 4. Call tool
         call_body = make_jsonrpc_request(
             "tools/call",
-            {"name": "hamster_services_search", "arguments": {"query": "light"}},
+            {"name": "hamster_search", "arguments": {"query": "light"}},
         )
         call_result = manager.receive_request(
             make_request(body=call_body, session_id="test-session-id"), now=0.0

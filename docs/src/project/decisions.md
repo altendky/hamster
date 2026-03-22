@@ -416,3 +416,220 @@ media_type = (content_type or "").split(";")[0].strip()
 if media_type != "application/json":
     return SendResponse(415, ...)
 ```
+
+## D024: Multi-Source Architecture
+
+**Decision:** Expose HA capabilities through three distinct source groups:
+`services`, `hass`, and `supervisor`.  Each group has its own discovery
+mechanism and enrichment sources.  Commands are identified by
+`<group>/<path>` (e.g., `services/light.turn_on`, `hass/get_states`).
+
+**Rationale:**
+
+- **Services** provide the richest metadata via `async_get_all_descriptions()`
+  but only cover actions, not queries.
+- **WebSocket commands** (`hass` group) cover queries (states, registries,
+  history, logs) that services don't expose.  Discoverable at runtime via
+  `hass.data["websocket_api"]`.
+- **Supervisor** provides capabilities unavailable through HA's internal
+  APIs (full logs, add-on management, backups).  Only available on HA OS /
+  Supervised installs.
+
+The three groups are complementary rather than overlapping.  While
+`hass/call_service` could technically call any service, the `services`
+group provides richer metadata for the same operations.  Both are exposed
+to allow exploration of which approach works better for LLM interaction.
+
+**Path format:** `<group>/<path>` makes the source explicit in every
+command reference, avoiding ambiguity and allowing group-level filtering.
+
+**Alternative considered:** Merging all sources into a single flat
+namespace.  Rejected because the discovery mechanisms and metadata
+richness differ significantly between sources.  Explicit grouping makes
+the architecture clearer.
+
+## D025: WebSocket Commands as Primary Query Interface
+
+**Decision:** The `hass` group exposes HA's WebSocket command registry as
+the primary interface for queries (states, registries, history, config).
+
+**Rationale:** WebSocket commands are the superset for read operations:
+
+- ~100% of read operations are available via WebSocket
+- ~15% are available via REST API
+- Registries, statistics, logbook, system_log are WebSocket-only
+
+The REST API is largely redundant with WebSocket and not discoverable at
+runtime.  WebSocket commands are discoverable via `hass.data["websocket_api"]`.
+
+**Filtering:** Only subscription commands (`subscribe_*`, `unsubscribe_*`)
+and auth commands are excluded.  Everything else is exposed, including
+"admin" operations like logs and registry mutations.
+
+**Enrichment:** WebSocket commands lack rich runtime metadata (HA
+maintainers have intentionally kept them undocumented for flexibility).
+Documentation from the `developers.home-assistant` GitHub repo provides
+command descriptions.  Service descriptions from `async_get_all_descriptions()`
+enrich the `call_service` command specifically.
+
+## D026: Service Descriptions as Metadata Enrichment
+
+**Decision:** Service descriptions from `async_get_all_descriptions()`
+are used to enrich the `hass/call_service` command, not as a separate
+primary interface.
+
+**Rationale:** Services and WebSocket commands are different interfaces
+to overlapping data:
+
+- Services = actions (turn on, turn off) with rich metadata
+- WebSocket = queries + actions with sparse metadata
+
+For `call_service` specifically, the service description metadata
+(field descriptions, selectors, targets) is invaluable for LLM
+comprehension.  This metadata is attached to the `hass/call_service`
+command's `explain` output.
+
+The `services` group is retained as a parallel interface because it
+provides a more direct mapping for action-oriented workflows.  Over time,
+usage patterns will inform whether both groups remain useful.
+
+## D027: GitHub Docs Enrichment Strategy
+
+**Decision:** Documentation for WebSocket commands is fetched from the
+`master` branch of `home-assistant/developers.home-assistant` on user
+request and cached.
+
+**Rationale:**
+
+- The docs repo has no version tags, so version matching is approximate.
+- `master` branch represents "current stable" documentation.
+- User-triggered refresh avoids startup latency and network failures
+  blocking HA startup.
+- On version mismatch (cached version != running HA), commands report
+  "description unavailable" but remain callable via schema.
+
+**Trade-offs accepted:**
+
+- Documentation may drift from running HA version.
+- Users must manually refresh after HA upgrades.
+- Network access required for initial fetch.
+
+**Future considerations:** Alternative strategies (date-based matching,
+bundling at Hamster release, local docs path for dev installs) are
+documented in open questions Q025-Q027.
+
+**Relationship to D018:** This enrichment *supplements* the raw HA
+descriptions from D018, not replaces them.  Service descriptions from
+`async_get_all_descriptions()` remain the primary metadata for the
+`services` group.  GitHub docs provide additional context for the `hass`
+group where runtime metadata is sparse.
+
+## D028: Supervisor Group Availability Detection
+
+**Decision:** The `supervisor` group is hidden when the Supervisor is
+unavailable.  Detection is via environment variables and integration
+presence.
+
+**Rationale:** Supervisor is only available on HA OS and Supervised
+installs.  Exposing unavailable commands would confuse users and LLMs.
+
+**Implementation:**
+
+- Check for `SUPERVISOR` and `SUPERVISOR_TOKEN` environment variables
+- Check for `hassio` integration presence
+- If unavailable, supervisor commands don't appear in search results
+- Attempts to explain/execute return clear "Supervisor not available" errors
+
+**Graceful degradation:** The `services` and `hass` groups work
+independently of Supervisor availability.
+
+## D029: `hass` Group Naming
+
+**Decision:** The WebSocket command group is named `hass`, not `ws` or
+other alternatives.
+
+**Rationale:** "ws" refers to the WebSocket protocol, but Hamster accesses
+the underlying command registry directly (not via WebSocket).  "hass" is
+the conventional name for the Home Assistant core object in HA's codebase
+(`hass` is the variable name used everywhere for the `HomeAssistant`
+instance).  It accurately represents that these are core HA commands.
+
+**Alternatives considered:**
+
+- `ws` --- Protocol name, not the data being accessed
+- `api` --- Too generic, could conflict with REST API terminology
+- `core` --- Could conflict with `supervisor/core/logs`
+- `ha` --- Short but `hass` is more established in HA developer parlance
+
+## D030: Tool Renaming for Multi-Source Architecture
+
+**Decision:** Rename tools from `hamster_services_*` to `hamster_*` with
+path-based addressing:
+
+- `hamster_services_search` → `hamster_search`
+- `hamster_services_explain` → `hamster_explain`
+- `hamster_services_call` → `hamster_call`
+- `hamster_services_schema` → `hamster_schema`
+
+**Rationale:** The multi-source architecture (D024) uses a unified
+`<group>/<path>` addressing scheme.  Generic tool names with path
+parameters allow the same 4 tools to work across all groups.
+Group-specific tool names would require 12 tools (4 per group) and
+complicate the interface.
+
+**Trade-off accepted:** This is a breaking change for any existing clients
+using the `hamster_services_*` names.  Acceptable since the project is in
+early development.
+
+## D031: SourceGroup Protocol Design
+
+**Decision:** Define a `SourceGroup` protocol with methods: `search()`,
+`explain()`, `schema()`, `has_command()`, `parse_call_args()`, plus an
+`available` property.
+
+**Rationale:** A protocol (structural subtyping) rather than an abstract
+base class allows groups to be implemented independently without
+inheritance coupling.  The method set covers the four operations needed
+by the MCP tools:
+
+- `search()` for `hamster_search`
+- `explain()` for `hamster_explain`
+- `schema()` for `hamster_schema`
+- `has_command()` + `parse_call_args()` for `hamster_call`
+
+The `available` property (default `True`) allows groups like `supervisor`
+to indicate they are unavailable on certain installations.
+
+Each group implements these methods according to its data source
+semantics.  The `GroupRegistry` dispatches to groups without knowing
+their internals.
+
+**Alternative considered:** Abstract base class with shared
+implementation.  Rejected because the three groups have fundamentally
+different data sources and don't share meaningful implementation.
+
+## D032: Effect Type Extensions for Multi-Source Architecture
+
+**Decision:** Extend the effect/continuation pattern (D002) with new
+effect types for each group:
+
+- `ServiceCall` (existing) for `services` group
+- `HassCommand` (new) for `hass` group
+- `SupervisorCall` (new) for `supervisor` group
+
+Each effect type has a corresponding continuation type and result type.
+
+**Rationale:** The sans-IO architecture requires explicit effect types
+for each kind of I/O.  Each group's commands invoke different HA
+subsystems:
+
+- Services: `hass.services.async_call()`
+- Hass commands: WebSocket handler invocation via internal adapter
+- Supervisor: HTTP calls to Supervisor API via `HassIO.send_command()`
+
+Separate effect types maintain the clean separation between pure protocol
+logic and I/O execution.
+
+**Alternative considered:** Generic `ExecuteCommand` effect with group
+discriminator.  Rejected because it would push group-specific logic into
+the effect handler, violating the separation of concerns.

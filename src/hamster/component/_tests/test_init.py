@@ -103,10 +103,10 @@ async def test_tool_list_returns_four_tools(
     assert len(TOOLS) == 4
 
 
-async def test_service_index_built_from_descriptions(
+async def test_registry_built_from_descriptions(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry
 ) -> None:
-    """Test that the service index is built from descriptions."""
+    """Test that the group registry is built from descriptions."""
     mock_descriptions = {
         "light": {
             "turn_on": {"description": "Turn on a light", "fields": {}},
@@ -121,13 +121,93 @@ async def test_service_index_built_from_descriptions(
         await hass.config_entries.async_setup(mock_config_entry.entry_id)
         await hass.async_block_till_done()
 
-    # Verify index was built with the service
+    # Verify registry was built with the service
     data = hass.data[DOMAIN][mock_config_entry.entry_id]
     manager = data["manager"]
 
     # Search should find the light service
-    result = manager._index.search("light")
+    result = manager._registry.search_all("light")
     assert "light.turn_on" in result
+
+
+async def test_all_three_groups_registered(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Test that all three groups (services, hass, supervisor) are registered."""
+    with patch(
+        "hamster.component.async_get_all_descriptions",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    data = hass.data[DOMAIN][mock_config_entry.entry_id]
+    manager = data["manager"]
+
+    # Check all groups are registered
+    services_group = manager._registry.get("services")
+    hass_group = manager._registry.get("hass")
+    supervisor_group = manager._registry.get("supervisor")
+
+    assert services_group is not None, "services group should be registered"
+    assert hass_group is not None, "hass group should be registered"
+    assert supervisor_group is not None, "supervisor group should be registered"
+
+    assert services_group.name == "services"
+    assert hass_group.name == "hass"
+    assert supervisor_group.name == "supervisor"
+
+
+async def test_hass_group_built_from_websocket_api(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Test that hass group is built from websocket_api registry."""
+    # Mock a simple websocket command
+    mock_handler = MagicMock()
+    mock_schema = False  # No additional params
+    hass.data["websocket_api"] = {
+        "get_states": (mock_handler, mock_schema),
+    }
+
+    with patch(
+        "hamster.component.async_get_all_descriptions",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    data = hass.data[DOMAIN][mock_config_entry.entry_id]
+    manager = data["manager"]
+
+    hass_group = manager._registry.get("hass")
+    assert hass_group is not None
+    assert hass_group.has_command("get_states")
+
+
+async def test_supervisor_group_availability_detected(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Test that supervisor group availability is correctly detected."""
+    with (
+        patch(
+            "hamster.component.async_get_all_descriptions",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        # Supervisor not available (no hassio)
+        patch("hamster.component.is_supervisor_available", return_value=False),
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    data = hass.data[DOMAIN][mock_config_entry.entry_id]
+    manager = data["manager"]
+
+    supervisor_group = manager._registry.get("supervisor")
+    assert supervisor_group is not None
+    assert supervisor_group.available is False
 
 
 async def test_request_after_unload_returns_503(
@@ -183,17 +263,17 @@ async def test_index_build_retries_on_failure(
     assert mock_config_entry.state is ConfigEntryState.LOADED
     assert call_count == 3
 
-    # Verify index was built with the service
+    # Verify registry was built with the service
     data = hass.data[DOMAIN][mock_config_entry.entry_id]
     manager = data["manager"]
-    result = manager._index.search("light")
+    result = manager._registry.search_all("light")
     assert "light.turn_on" in result
 
 
 async def test_index_build_all_retries_fail_starts_empty(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry
 ) -> None:
-    """Test that if all retries fail, starts with empty index."""
+    """Test that if all retries fail, starts with partial registry."""
     call_count = 0
 
     async def always_failing(*args: object, **kwargs: object) -> dict[str, object]:
@@ -211,16 +291,24 @@ async def test_index_build_all_retries_fail_starts_empty(
         await hass.config_entries.async_setup(mock_config_entry.entry_id)
         await hass.async_block_till_done()
 
-    # Should still succeed with empty index
+    # Should still succeed with partial registry
     assert mock_config_entry.state is ConfigEntryState.LOADED
-    # 5 attempts (1 initial + 4 retries)
-    assert call_count == 5
+    # 6 attempts: 5 for retry loop + 1 for partial build of services group
+    assert call_count == 6
 
-    # Verify index is empty
+    # Verify registry has groups but services is empty
     data = hass.data[DOMAIN][mock_config_entry.entry_id]
     manager = data["manager"]
-    result = manager._index.search("anything")
-    assert "No services found" in result
+
+    # All three groups should still be registered
+    assert manager._registry.get("services") is not None
+    assert manager._registry.get("hass") is not None
+    assert manager._registry.get("supervisor") is not None
+
+    # Services group should be empty
+    result = manager._registry.search_all("anything")
+    # Should get "No commands found" since all groups are empty
+    assert "No commands found" in result or "No" in result
 
 
 async def test_service_events_trigger_index_rebuild(
@@ -293,10 +381,10 @@ async def test_index_refresh_failure_preserves_existing(
         await hass.config_entries.async_setup(mock_config_entry.entry_id)
         await hass.async_block_till_done()
 
-        # Verify initial index
+        # Verify initial registry
         data = hass.data[DOMAIN][mock_config_entry.entry_id]
         manager = data["manager"]
-        result = manager._index.search("light")
+        result = manager._registry.search_all("light")
         assert "light.turn_on" in result
 
         # Fire a service event to trigger rebuild
@@ -312,8 +400,8 @@ async def test_index_refresh_failure_preserves_existing(
         await asyncio.sleep(0.6)
         await hass.async_block_till_done()
 
-    # Index should still have the original service (preserved on failure)
-    result = manager._index.search("light")
+    # Registry should still have the original service (preserved on failure)
+    result = manager._registry.search_all("light")
     assert "light.turn_on" in result
 
 

@@ -21,9 +21,15 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 import pytest
 
+from hamster.mcp._core.groups import GroupRegistry, ServicesGroup
 from hamster.mcp._core.session import SessionManager
-from hamster.mcp._core.tools import ServiceIndex
-from hamster.mcp._core.types import ServerInfo, ServiceCallResult
+from hamster.mcp._core.supervisor_group import SupervisorGroup
+from hamster.mcp._core.types import (
+    HassCommandResult,
+    ServerInfo,
+    ServiceCallResult,
+    SupervisorCallResult,
+)
 from hamster.mcp._io.aiohttp import AiohttpMCPTransport, EffectHandler
 
 # Re-enable sockets for this module (disabled by pytest-homeassistant-custom-component)
@@ -42,10 +48,18 @@ class MockEffectHandler:
     def __init__(self) -> None:
         """Initialize mock handler."""
         self.calls: list[
-            tuple[str, str, dict[str, object] | None, dict[str, object]]
+            tuple[str, str, dict[str, object] | None, dict[str, object], str | None]
         ] = []
+        self.hass_calls: list[tuple[str, dict[str, object], str | None]] = []
+        self.supervisor_calls: list[tuple[str, str, dict[str, object], str | None]] = []
         self.result = ServiceCallResult(success=True, data={"result": "ok"})
+        self.hass_result = HassCommandResult(success=True, data={"result": "ok"})
+        self.supervisor_result = SupervisorCallResult(
+            success=True, data={"version": "2024.1"}
+        )
         self.should_raise: Exception | None = None
+        self.hass_should_raise: Exception | None = None
+        self.supervisor_should_raise: Exception | None = None
 
     async def execute_service_call(
         self,
@@ -53,12 +67,38 @@ class MockEffectHandler:
         service: str,
         target: dict[str, object] | None,
         data: dict[str, object],
+        user_id: str | None,
     ) -> ServiceCallResult:
         """Execute mock service call."""
-        self.calls.append((domain, service, target, data))
+        self.calls.append((domain, service, target, data, user_id))
         if self.should_raise is not None:
             raise self.should_raise
         return self.result
+
+    async def execute_hass_command(
+        self,
+        command_type: str,
+        params: dict[str, object],
+        user_id: str | None,
+    ) -> HassCommandResult:
+        """Execute mock hass command."""
+        self.hass_calls.append((command_type, params, user_id))
+        if self.hass_should_raise is not None:
+            raise self.hass_should_raise
+        return self.hass_result
+
+    async def execute_supervisor_call(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, object],
+        user_id: str | None,
+    ) -> SupervisorCallResult:
+        """Execute mock supervisor call."""
+        self.supervisor_calls.append((method, path, params, user_id))
+        if self.supervisor_should_raise is not None:
+            raise self.supervisor_should_raise
+        return self.supervisor_result
 
 
 # Verify MockEffectHandler satisfies EffectHandler protocol
@@ -85,23 +125,27 @@ def session_manager(session_counter: list[int]) -> SessionManager:
         idle_timeout=1800.0,
         session_id_factory=factory,
     )
-    # Add some services to the index for tool testing
-    manager.update_index(
-        ServiceIndex(
-            {
-                "light": {
-                    "turn_on": {
-                        "description": "Turn on a light",
-                        "fields": {"brightness": {"description": "Brightness level"}},
-                    },
-                    "turn_off": {
-                        "description": "Turn off a light",
-                        "fields": {},
-                    },
+    # Add some services via a registry
+    registry = GroupRegistry()
+    services_group = ServicesGroup(
+        {
+            "light": {
+                "turn_on": {
+                    "description": "Turn on a light",
+                    "fields": {"brightness": {"description": "Brightness level"}},
                 },
-            }
-        )
+                "turn_off": {
+                    "description": "Turn off a light",
+                    "fields": {},
+                },
+            },
+        }
     )
+    registry.register(services_group)
+    # Add supervisor group (available)
+    supervisor_group = SupervisorGroup(available=True)
+    registry.register(supervisor_group)
+    manager.update_registry(registry)
     return manager
 
 
@@ -205,15 +249,15 @@ class TestCompleteFlow:
         tools = data["result"]["tools"]
         assert len(tools) == 4
         tool_names = {t["name"] for t in tools}
-        assert "hamster_services_call" in tool_names
+        assert "hamster_call" in tool_names
 
-        # tools/call - hamster_services_search (no I/O)
+        # tools/call - hamster_search (no I/O)
         resp = await client.post(
             "/mcp",
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_services_search",
+                    "name": "hamster_search",
                     "arguments": {"query": "light"},
                 },
             ),
@@ -229,18 +273,19 @@ class TestCompleteFlow:
         assert len(content) == 1
         assert "light" in content[0]["text"].lower()
 
-        # tools/call - hamster_services_call (with I/O)
+        # tools/call - hamster_call (with I/O)
         resp = await client.post(
             "/mcp",
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_services_call",
+                    "name": "hamster_call",
                     "arguments": {
-                        "domain": "light",
-                        "service": "turn_on",
-                        "target": {"entity_id": ["light.living_room"]},
-                        "data": {"brightness": 255},
+                        "path": "services/light.turn_on",
+                        "arguments": {
+                            "target": {"entity_id": ["light.living_room"]},
+                            "data": {"brightness": 255},
+                        },
                     },
                 },
             ),
@@ -314,13 +359,13 @@ class TestEffectDispatch:
         """Done effect returns result immediately without I/O."""
         session_id = await _init_session(client)
 
-        # hamster_services_search returns Done immediately
+        # hamster_search returns Done immediately
         resp = await client.post(
             "/mcp",
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_services_search",
+                    "name": "hamster_search",
                     "arguments": {"query": "light"},
                 },
             ),
@@ -348,11 +393,10 @@ class TestEffectDispatch:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_services_call",
+                    "name": "hamster_call",
                     "arguments": {
-                        "domain": "light",
-                        "service": "turn_on",
-                        "data": {},
+                        "path": "services/light.turn_on",
+                        "arguments": {},
                     },
                 },
             ),
@@ -383,11 +427,10 @@ class TestEffectDispatch:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_services_call",
+                    "name": "hamster_call",
                     "arguments": {
-                        "domain": "light",
-                        "service": "turn_on",
-                        "data": {},
+                        "path": "services/light.turn_on",
+                        "arguments": {},
                     },
                 },
             ),
@@ -452,16 +495,16 @@ class TestBatchRequests:
             _make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_services_call",
-                    "arguments": {"domain": "light", "service": "turn_on", "data": {}},
+                    "name": "hamster_call",
+                    "arguments": {"path": "services/light.turn_on", "arguments": {}},
                 },
                 request_id=1,
             ),
             _make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_services_call",
-                    "arguments": {"domain": "light", "service": "turn_off", "data": {}},
+                    "name": "hamster_call",
+                    "arguments": {"path": "services/light.turn_off", "arguments": {}},
                 },
                 request_id=2,
             ),
@@ -522,7 +565,7 @@ class TestWakeupLoop:
             idle_timeout=1800.0,
             debounce_delay=0.05,  # Short debounce for testing
         )
-        manager.update_index(ServiceIndex({}))
+        manager.update_registry(GroupRegistry())
 
         transport = AiohttpMCPTransport(
             manager, effect_handler, index_rebuild_callback=rebuild_callback
@@ -565,7 +608,7 @@ class TestWakeupLoop:
             idle_timeout=0.05,  # Very short timeout for testing
             session_id_factory=factory,
         )
-        manager.update_index(ServiceIndex({}))
+        manager.update_registry(GroupRegistry())
 
         transport = AiohttpMCPTransport(manager, effect_handler)
 
@@ -656,7 +699,7 @@ class TestWakeupLoopErrorResilience:
             idle_timeout=1800.0,
             debounce_delay=0.5,
         )
-        manager.update_index(ServiceIndex({}))
+        manager.update_registry(GroupRegistry())
 
         transport = AiohttpMCPTransport(manager, effect_handler)
 
@@ -705,7 +748,7 @@ class TestWakeupLoopErrorResilience:
             idle_timeout=1800.0,
             debounce_delay=0.02,
         )
-        manager.update_index(ServiceIndex({}))
+        manager.update_registry(GroupRegistry())
 
         transport = AiohttpMCPTransport(
             manager, effect_handler, index_rebuild_callback=failing_callback
@@ -731,3 +774,215 @@ class TestWakeupLoopErrorResilience:
         loop_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await loop_task
+
+
+class TestSupervisorCallDispatch:
+    """Test SupervisorCall effect dispatch."""
+
+    async def test_supervisor_call_invokes_handler(
+        self,
+        client: TestClient[web.Request, web.Application],
+        effect_handler: MockEffectHandler,
+    ) -> None:
+        """SupervisorCall effect invokes the effect handler."""
+        session_id = await _init_session(client)
+
+        effect_handler.supervisor_result = SupervisorCallResult(
+            success=True, data={"version": "2024.1", "hostname": "homeassistant"}
+        )
+
+        resp = await client.post(
+            "/mcp",
+            json=_make_jsonrpc(
+                "tools/call",
+                {
+                    "name": "hamster_call",
+                    "arguments": {
+                        "path": "supervisor/core/info",
+                        "arguments": {},
+                    },
+                },
+            ),
+            headers={
+                "Content-Type": "application/json",
+                "Mcp-Session-Id": session_id,
+            },
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert "result" in data
+        content = data["result"]["content"]
+        assert "version" in content[0]["text"]
+        assert "2024.1" in content[0]["text"]
+        assert len(effect_handler.supervisor_calls) == 1
+
+    async def test_supervisor_call_handler_params(
+        self,
+        client: TestClient[web.Request, web.Application],
+        effect_handler: MockEffectHandler,
+    ) -> None:
+        """SupervisorCall passes correct parameters to handler."""
+        session_id = await _init_session(client)
+
+        resp = await client.post(
+            "/mcp",
+            json=_make_jsonrpc(
+                "tools/call",
+                {
+                    "name": "hamster_call",
+                    "arguments": {
+                        "path": "supervisor/core/logs",
+                        "arguments": {},
+                    },
+                },
+            ),
+            headers={
+                "Content-Type": "application/json",
+                "Mcp-Session-Id": session_id,
+            },
+        )
+        assert resp.status == 200
+        assert len(effect_handler.supervisor_calls) == 1
+        call = effect_handler.supervisor_calls[0]
+        assert call[0] == "GET"  # method
+        assert call[1] == "/core/logs"  # path
+
+    async def test_supervisor_call_with_path_params(
+        self,
+        client: TestClient[web.Request, web.Application],
+        effect_handler: MockEffectHandler,
+    ) -> None:
+        """SupervisorCall with path parameters substitutes correctly."""
+        session_id = await _init_session(client)
+
+        resp = await client.post(
+            "/mcp",
+            json=_make_jsonrpc(
+                "tools/call",
+                {
+                    "name": "hamster_call",
+                    "arguments": {
+                        "path": "supervisor/addons/{slug}/info",
+                        "arguments": {"slug": "my_addon"},
+                    },
+                },
+            ),
+            headers={
+                "Content-Type": "application/json",
+                "Mcp-Session-Id": session_id,
+            },
+        )
+        assert resp.status == 200
+        assert len(effect_handler.supervisor_calls) == 1
+        call = effect_handler.supervisor_calls[0]
+        assert call[0] == "GET"  # method
+        assert call[1] == "/addons/my_addon/info"  # path with substitution
+        assert "slug" not in call[2]  # slug should not be in remaining params
+
+    async def test_supervisor_call_exception_produces_error(
+        self,
+        client: TestClient[web.Request, web.Application],
+        effect_handler: MockEffectHandler,
+    ) -> None:
+        """SupervisorCall handler exception produces error response."""
+        session_id = await _init_session(client)
+
+        effect_handler.supervisor_should_raise = ValueError("Supervisor API error")
+
+        resp = await client.post(
+            "/mcp",
+            json=_make_jsonrpc(
+                "tools/call",
+                {
+                    "name": "hamster_call",
+                    "arguments": {
+                        "path": "supervisor/core/info",
+                        "arguments": {},
+                    },
+                },
+            ),
+            headers={
+                "Content-Type": "application/json",
+                "Mcp-Session-Id": session_id,
+            },
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert "result" in data
+        content = data["result"]["content"]
+        assert "ValueError" in content[0]["text"]
+        assert "Supervisor API error" in content[0]["text"]
+        assert data["result"].get("isError") is True
+
+    async def test_supervisor_call_logs_response(
+        self,
+        client: TestClient[web.Request, web.Application],
+        effect_handler: MockEffectHandler,
+    ) -> None:
+        """SupervisorCall with text (logs) response formats correctly."""
+        session_id = await _init_session(client)
+
+        # Logs are typically wrapped in a dict by the effect handler
+        effect_handler.supervisor_result = SupervisorCallResult(
+            success=True,
+            data={"logs": "2024-01-01 INFO Starting...\n2024-01-01 INFO Ready"},
+        )
+
+        resp = await client.post(
+            "/mcp",
+            json=_make_jsonrpc(
+                "tools/call",
+                {
+                    "name": "hamster_call",
+                    "arguments": {
+                        "path": "supervisor/core/logs",
+                        "arguments": {},
+                    },
+                },
+            ),
+            headers={
+                "Content-Type": "application/json",
+                "Mcp-Session-Id": session_id,
+            },
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        content = data["result"]["content"]
+        assert "Starting" in content[0]["text"]
+        assert "Ready" in content[0]["text"]
+
+    async def test_supervisor_call_error_result(
+        self,
+        client: TestClient[web.Request, web.Application],
+        effect_handler: MockEffectHandler,
+    ) -> None:
+        """SupervisorCall error result returns is_error=True."""
+        session_id = await _init_session(client)
+
+        effect_handler.supervisor_result = SupervisorCallResult(
+            success=False, error="Supervisor access requires admin privileges"
+        )
+
+        resp = await client.post(
+            "/mcp",
+            json=_make_jsonrpc(
+                "tools/call",
+                {
+                    "name": "hamster_call",
+                    "arguments": {
+                        "path": "supervisor/core/info",
+                        "arguments": {},
+                    },
+                },
+            ),
+            headers={
+                "Content-Type": "application/json",
+                "Mcp-Session-Id": session_id,
+            },
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert "result" in data
+        content = data["result"]["content"]
+        assert "admin" in content[0]["text"].lower()
+        assert data["result"].get("isError") is True

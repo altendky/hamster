@@ -10,14 +10,17 @@ import asyncio
 import contextlib
 import importlib.metadata
 import logging
+import os
 import time
 from typing import TYPE_CHECKING
 
 from homeassistant.const import EVENT_SERVICE_REGISTERED, EVENT_SERVICE_REMOVED
 from homeassistant.helpers.service import async_get_all_descriptions
 
+from hamster.mcp._core.groups import GroupRegistry, ServicesGroup
+from hamster.mcp._core.hass_group import HassGroup, discover_commands
 from hamster.mcp._core.session import SessionManager
-from hamster.mcp._core.tools import ServiceIndex
+from hamster.mcp._core.supervisor_group import SupervisorGroup
 from hamster.mcp._core.types import ServerInfo
 from hamster.mcp._io.aiohttp import AiohttpMCPTransport
 
@@ -36,36 +39,77 @@ _MAX_RETRIES = 4
 _RETRY_DELAYS = [1.0, 2.0, 4.0, 8.0, 15.0]
 
 
-async def _build_service_index(hass: HomeAssistant) -> ServiceIndex:
-    """Build a ServiceIndex from current service descriptions.
+def is_supervisor_available(hass: HomeAssistant) -> bool:
+    """Check if Supervisor is available.
 
     Args:
         hass: Home Assistant instance
 
     Returns:
-        ServiceIndex built from current descriptions
+        True if Supervisor is available and accessible
     """
-    descriptions = await async_get_all_descriptions(hass)
-    return ServiceIndex(descriptions)
+    # Import here to avoid issues when hassio is not installed
+    try:
+        from homeassistant.helpers.hassio import is_hassio
+    except ImportError:
+        return False
+
+    # is_hassio() checks both SUPERVISOR env and hassio component
+    if not is_hassio(hass):
+        return False
+
+    # Also need the auth token for API calls
+    return bool(os.environ.get("SUPERVISOR_TOKEN"))
 
 
-async def _build_service_index_with_retry(hass: HomeAssistant) -> ServiceIndex:
-    """Build a ServiceIndex with retry on failure.
+async def _build_registry(hass: HomeAssistant) -> GroupRegistry:
+    """Build a GroupRegistry with all available groups.
 
     Args:
         hass: Home Assistant instance
 
     Returns:
-        ServiceIndex, or empty index if all retries fail
+        GroupRegistry with all groups registered
+    """
+    registry = GroupRegistry()
+
+    # Services group
+    descriptions = await async_get_all_descriptions(hass)
+    registry.register(ServicesGroup(descriptions))
+
+    # Hass group (WebSocket commands)
+    ws_registry = hass.data.get("websocket_api", {})
+    commands = discover_commands(ws_registry)
+    registry.register(HassGroup(commands))
+
+    # Supervisor group (availability-dependent)
+    supervisor_available = is_supervisor_available(hass)
+    registry.register(SupervisorGroup(available=supervisor_available))
+
+    return registry
+
+
+async def _build_registry_with_retry(hass: HomeAssistant) -> GroupRegistry:
+    """Build a GroupRegistry with retry on failure.
+
+    If building fails completely, returns an empty registry.
+    Individual group failures are handled gracefully - other groups
+    will still be registered.
+
+    Args:
+        hass: Home Assistant instance
+
+    Returns:
+        GroupRegistry, possibly with some groups empty if they failed
     """
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            return await _build_service_index(hass)
+            return await _build_registry(hass)
         except Exception:
             if attempt < _MAX_RETRIES:
                 delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
                 _LOGGER.warning(
-                    "Failed to build service index (attempt %d/%d), retrying in %.1fs",
+                    "Failed to build group registry (attempt %d/%d), retrying in %.1fs",
                     attempt + 1,
                     _MAX_RETRIES + 1,
                     delay,
@@ -73,12 +117,50 @@ async def _build_service_index_with_retry(hass: HomeAssistant) -> ServiceIndex:
                 await asyncio.sleep(delay)
             else:
                 _LOGGER.warning(
-                    "Failed to build service index after %d attempts, starting empty",
+                    "Failed to build registry after %d attempts, using partial",
                     _MAX_RETRIES + 1,
                 )
-                return ServiceIndex({})
+                # Build partial registry - try each group separately
+                return await _build_partial_registry(hass)
     # Should not reach here
-    return ServiceIndex({})  # pragma: no cover
+    return GroupRegistry()  # pragma: no cover
+
+
+async def _build_partial_registry(hass: HomeAssistant) -> GroupRegistry:
+    """Build a partial registry when full build fails.
+
+    Tries to build each group independently, logging errors for failures.
+
+    Args:
+        hass: Home Assistant instance
+
+    Returns:
+        GroupRegistry with whatever groups could be built
+    """
+    registry = GroupRegistry()
+
+    # Try services group
+    try:
+        descriptions = await async_get_all_descriptions(hass)
+        registry.register(ServicesGroup(descriptions))
+    except Exception:
+        _LOGGER.warning("Failed to build services group, starting empty")
+        registry.register(ServicesGroup({}))
+
+    # Try hass group
+    try:
+        ws_registry = hass.data.get("websocket_api", {})
+        commands = discover_commands(ws_registry)
+        registry.register(HassGroup(commands))
+    except Exception:
+        _LOGGER.warning("Failed to build hass group, starting empty")
+        registry.register(HassGroup({}))
+
+    # Supervisor group (can't fail - just availability check)
+    supervisor_available = is_supervisor_available(hass)
+    registry.register(SupervisorGroup(available=supervisor_available))
+
+    return registry
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -106,22 +188,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     effect_handler = HamsterEffectHandler(hass)
 
-    # Build initial service index
-    index = await _build_service_index_with_retry(hass)
-    manager.update_index(index)
+    # Build initial group registry
+    registry = await _build_registry_with_retry(hass)
+    manager.update_registry(registry)
 
-    # Create index rebuild callback for the transport
-    async def rebuild_index_callback() -> None:
-        """Rebuild the service index."""
+    # Create services group rebuild callback for the transport
+    # Only services group needs rebuilding on service events;
+    # hass and supervisor groups don't change at runtime
+    async def rebuild_services_callback() -> None:
+        """Rebuild the services group after service changes."""
         try:
-            new_index = await _build_service_index(hass)
-            manager.update_index(new_index)
+            descriptions = await async_get_all_descriptions(hass)
+            services_group = ServicesGroup(descriptions)
+            manager.update_services_group(services_group)
         except Exception:
-            _LOGGER.warning("Failed to rebuild service index, keeping existing")
+            _LOGGER.warning("Failed to rebuild services group, keeping existing")
 
     # Create transport
     transport = AiohttpMCPTransport(
-        manager, effect_handler, index_rebuild_callback=rebuild_index_callback
+        manager, effect_handler, index_rebuild_callback=rebuild_services_callback
     )
 
     # Register HTTP view
