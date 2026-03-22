@@ -80,8 +80,20 @@ class InternalConnection:
 
         Args:
             msg_id: Message ID (unused for internal invocation)
-            result: Command result
+            result: Command result (may contain orjson.Fragment objects)
+
+        Note:
+            Some HA handlers return data containing orjson.Fragment objects
+            for performance (pre-serialized JSON). We unwrap these by doing
+            a round-trip through orjson serialization.
         """
+        import orjson
+
+        # Unwrap any orjson.Fragment objects by serializing and deserializing.
+        # This ensures the result contains only plain Python types that can be
+        # serialized by any JSON library (e.g., the stdlib json module).
+        if result is not None:
+            result = orjson.loads(orjson.dumps(result))
         self.result = result
         self._result_event.set()
 

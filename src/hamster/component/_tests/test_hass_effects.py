@@ -94,6 +94,62 @@ class TestInternalConnectionSendResult:
         assert conn.error is None
         assert conn._result_event.is_set()
 
+    def test_send_result_unwraps_orjson_fragment(self) -> None:
+        """send_result unwraps orjson.Fragment objects in the result.
+
+        Some HA WebSocket handlers return data containing orjson.Fragment
+        objects for performance (pre-serialized JSON). The InternalConnection
+        must unwrap these so the result contains only plain Python types.
+        """
+        import orjson
+
+        hass = MagicMock()
+        conn = InternalConnection(hass, None)
+
+        # Simulate a result containing orjson.Fragment objects
+        result_with_fragments = {
+            "normal_key": "normal_value",
+            "fragment_key": orjson.Fragment(b'{"nested": "data"}'),
+            "list_with_fragment": [1, orjson.Fragment(b'"string_value"'), 3],
+        }
+
+        conn.send_result(1, result_with_fragments)
+
+        # The result should be unwrapped to plain Python types
+        assert conn.result == {
+            "normal_key": "normal_value",
+            "fragment_key": {"nested": "data"},
+            "list_with_fragment": [1, "string_value", 3],
+        }
+        assert conn.error is None
+        assert conn._result_event.is_set()
+
+    def test_send_result_unwraps_deeply_nested_fragments(self) -> None:
+        """send_result unwraps deeply nested orjson.Fragment objects."""
+        import orjson
+
+        hass = MagicMock()
+        conn = InternalConnection(hass, None)
+
+        # Simulate deeply nested fragments
+        result_with_fragments = {
+            "level1": {
+                "level2": {
+                    "fragment": orjson.Fragment(b'{"deep": "value"}'),
+                }
+            }
+        }
+
+        conn.send_result(1, result_with_fragments)
+
+        assert conn.result == {
+            "level1": {
+                "level2": {
+                    "fragment": {"deep": "value"},
+                }
+            }
+        }
+
 
 class TestInternalConnectionSendError:
     """Tests for InternalConnection.send_error()."""
