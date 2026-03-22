@@ -109,6 +109,7 @@ class IncomingRequest:
     content_type: str | None
     accept: str | None
     origin: str | None
+    host: str                # from Host header
     session_id: str | None   # from Mcp-Session-Id header
     body: bytes
 

@@ -38,6 +38,7 @@ class ServiceCall:
     """Tool needs an HA service call."""
     domain: str
     service: str
+    target: dict[str, object] | None
     data: dict[str, object]
     continuation: Continuation
 
@@ -49,8 +50,12 @@ class FormatServiceResponse:
 
 ToolEffect = Done | ServiceCall
 
-def call_tool(name: str, arguments: dict[str, object]) -> ToolEffect:
-    """Pure function: tool call arguments -> effect."""
+def call_tool(
+    name: str,
+    arguments: dict[str, object],
+    index: ServiceIndex,
+) -> ToolEffect:
+    """Pure function: tool call arguments + index -> effect."""
     ...
 
 def resume(
@@ -73,11 +78,12 @@ async def run_effects(
             case ServiceCall(
                 domain=domain,
                 service=service,
+                target=target,
                 data=data,
                 continuation=continuation,
             ):
                 result = await effect_handler.execute_service_call(
-                    domain, service, data,
+                    domain, service, target, data,
                 )
                 current = resume(
                     continuation,

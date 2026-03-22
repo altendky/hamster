@@ -361,3 +361,58 @@ strikes the balance.
 **Alternative considered:** Logging all tool calls at INFO.  Rejected
 because the LLM typically makes several `search`/`explain` round-trips
 per user request, which would be noisy at the default level.
+
+**Correlation:** Log messages should include session ID and JSON-RPC
+request ID where available, enabling request tracing without additional
+infrastructure.  Example:
+
+```python
+_LOGGER.info("[session=%s req=%s] tools/call %s.%s", session_id, request_id, domain, service)
+```
+
+## D022: Origin Header Validation (Same-Origin Check)
+
+**Decision:** Validate the `Origin` header using same-origin checking.
+
+**Rationale:** The MCP Streamable HTTP spec says servers **MUST** validate
+the `Origin` header to prevent DNS rebinding attacks.  This is a hard
+requirement, not a SHOULD.
+
+**Implementation:**
+
+- Add `host` field to `IncomingRequest` (from the `Host` header).
+- If `Origin` header is absent, allow the request (non-browser clients
+  like curl and MCP CLI tools don't send `Origin`).
+- If `Origin` header is present, extract the host portion (scheme, host,
+  and optional port) and compare to the `Host` header.  If they don't
+  match, reject with `SendResponse(403)`.
+
+**Example:**
+
+- `Host: homeassistant.local:8123`, `Origin: http://homeassistant.local:8123` → allowed
+- `Host: homeassistant.local:8123`, `Origin: http://evil.com` → rejected (403)
+- `Host: homeassistant.local:8123`, `Origin: (absent)` → allowed
+
+**Alternative considered:** Relying solely on HA's bearer token auth.
+Rejected because DNS rebinding can trick a browser into sending
+authenticated requests to an attacker-controlled origin, and the MCP spec
+requires Origin validation regardless of other auth mechanisms.
+
+## D023: Content-Type Parameter Stripping (Defensive)
+
+**Decision:** The sans-IO core defensively strips Content-Type parameters
+(e.g., `; charset=utf-8`) rather than requiring the transport to normalize.
+
+**Rationale:** Defense-in-depth. The cost is negligible (simple string
+split on `;` and strip). While aiohttp's `request.content_type` already
+strips parameters, other transports might not. Core tests can exercise
+parameter stripping directly without relying on transport behavior.
+
+**Implementation:** In `receive_request()`, before comparing Content-Type
+to `"application/json"`, split on `;` and take the first part:
+
+```python
+media_type = (content_type or "").split(";")[0].strip()
+if media_type != "application/json":
+    return SendResponse(415, ...)
+```

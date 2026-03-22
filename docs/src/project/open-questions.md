@@ -75,28 +75,9 @@ Moved to [Decisions](decisions.md) as D020.
 
 Moved to [Decisions](decisions.md) as D021.
 
-## Q010: Origin Header Validation Strategy
+## ~~Q010: Origin Header Validation Strategy~~ --- RESOLVED
 
-**Question:** How should the server validate the `Origin` header to prevent
-DNS rebinding attacks?
-
-**Context:** The MCP Streamable HTTP spec says servers SHOULD validate the
-`Origin` header.  Common approaches:
-
-- If `Origin` is absent → allow (non-browser clients don't send it).
-- If `Origin` is present → check against an allowlist or compare to the
-  request's `Host` header (same-origin check).
-
-HA already enforces authentication (`requires_auth = True`), so DNS
-rebinding without a valid bearer token accomplishes nothing.  Options:
-
-1. Add `host` to `IncomingRequest`, do same-origin checking.
-2. Skip Origin validation, rely on HA auth.  Document as a known
-   limitation.
-3. Reject all requests that have an `Origin` header (blocks browser-based
-   clients entirely).
-
-**No strong leaning yet.**
+Moved to [Decisions](decisions.md) as D022.
 
 ## Q011: Accept Header and SSE Support
 
@@ -113,10 +94,13 @@ The current plan uses a simple compatibility check: accept headers
 containing `application/json`, `application/*`, or `*/*` pass.  Full
 RFC 7231 content negotiation (q-values, media-range parsing) is deferred.
 
+**Decision:** Missing `Accept` header (`None`) is treated as `*/*` for
+developer convenience (curl, testing tools).  The MCP spec requires
+clients to send `Accept` but does not require servers to enforce it.
+Empty string `Accept: ""` is still rejected with 406.
+
 When SSE support lands (see Q012), this should be revisited to decide
 whether to also require `text/event-stream` in the Accept header.
-
-**Leaning toward:** Keep the simple check for now.  Revisit with SSE.
 
 ## Q012: Server-Sent Events (SSE) Support
 
@@ -197,29 +181,9 @@ incomplete --- the implementation should include a comment noting this.
 **Leaning toward:** Defer both.  Add `AudioContent` when a use case
 emerges.  `EmbeddedResource` deferred longer.
 
-## Q015: Content-Type Parameter Stripping Responsibility
+## ~~Q015: Content-Type Parameter Stripping Responsibility~~ --- RESOLVED
 
-**Question:** Should the sans-IO core defensively strip Content-Type
-parameters (e.g. `; charset=utf-8`), or trust the transport to normalize
-the header before building `IncomingRequest`?
-
-**Context:** Stage 5 says the core ignores Content-Type parameters ---
-only the media type portion is checked.  Stage 6 notes that aiohttp's
-`request.content_type` already strips parameters before the core sees
-them.  This means the core's parameter-stripping logic is dead code in
-production (aiohttp never passes parameters through), but it is
-exercised in Stage 5's pure tests which construct `IncomingRequest`
-values directly.
-
-Options:
-
-1. Core strips parameters defensively (defense-in-depth, testable in
-   isolation, correct if a different transport doesn't strip).
-2. Core requires pre-normalized media type (simpler core, transport
-   contract is explicit).
-
-**Leaning toward:** Option 1 --- core strips defensively.  The cost is
-negligible and it avoids a hidden contract between transport and core.
+Moved to [Decisions](decisions.md) as D023.
 
 ## Q016: Batch Request Containing `initialize` --- Error Format
 
@@ -245,3 +209,101 @@ newly-created session, both of which are problematic.
 and a JSON-RPC `INVALID_REQUEST` error body.  This is the simplest
 behavior and avoids ambiguity about session state for other messages in
 the batch.
+
+## Q020: Batch Requests Containing `tools/call`
+
+**Question:** Should multiple `tools/call` requests in a batch be processed
+sequentially or concurrently?
+
+**Context:** A batch request can contain multiple `tools/call` requests,
+each of which produces a `RunEffects` result requiring I/O dispatch.  The
+transport must process all of them and collect responses into a JSON array.
+
+Options:
+
+1. **Sequential** --- process each `RunEffects` in order.  Simple, no
+   concurrency concerns.  If one fails, subsequent calls still run.
+2. **Concurrent** --- spawn all effect dispatches concurrently, gather
+   results.  More complex: need to handle partial failures, correlate
+   responses to request IDs correctly.
+3. **Reject** --- batches containing `tools/call` are not supported.
+   Return an error for the whole batch or per-item errors.
+
+**v1 decision:** Sequential processing.  Simplest approach, avoids
+concurrency complexity.  Concurrent processing can be revisited if there's
+a demonstrated need for parallel tool execution within a single batch.
+
+**Leaning toward:** Keep sequential for now.  Revisit if performance
+becomes a concern.
+
+## Q021: Request Body Size Limits
+
+**Question:** Should the server enforce a maximum request body size?
+
+**Context:** Without a limit, a malicious client could send very large
+POST bodies, consuming memory. HA's HTTP server may have its own limits,
+but these aren't documented or guaranteed.
+
+**Options:**
+
+1. Enforce a limit in the transport (e.g., 1MB) before reading the body.
+2. Rely on HA's HTTP server limits (if any).
+3. Document as a known limitation for v1.
+
+**No strong leaning yet.**
+
+## Q022: Maximum Concurrent Sessions
+
+**Question:** Should the server limit the number of concurrent sessions?
+
+**Context:** Without a limit, a malicious client could create thousands of
+sessions, consuming memory. Each session is lightweight (state machine +
+timestamps), but unbounded growth is a concern.
+
+**Options:**
+
+1. Add a configurable max session count (e.g., 100). New `initialize`
+   requests return an error when the limit is reached.
+2. Rely on HA auth and external rate limiting.
+3. Document as a known limitation for v1.
+
+**No strong leaning yet.**
+
+## Q023: Monitoring and Metrics
+
+**Question:** Should the integration expose operational metrics?
+
+**Context:** For production deployments, operators may want visibility into:
+
+- Active session count
+- Requests per second / minute
+- Index size (number of services)
+- Index rebuild frequency
+
+**Options:**
+
+1. Expose metrics via HA's statistics/sensor infrastructure.
+2. Log periodic summaries at INFO level.
+3. Defer to v2.
+
+**Leaning toward:** Defer to v2.
+
+## Q024: Tool Argument Type Validation
+
+**Question:** Should `call_tool()` validate argument types beyond checking
+that domain/service exist in the index?
+
+**Context:** Arguments come from the LLM and may have wrong types (e.g.,
+`domain` as int instead of string, `target.entity_id` as string instead of
+array). Currently, these would fail downstream in HA's `async_call()` or
+produce Python type errors.
+
+**Options:**
+
+1. Add explicit type validation in `call_tool()`, returning
+   `Done(CallToolResult(is_error=True))` for malformed arguments.
+2. Rely on HA's validation and Python type errors (caught by effect
+   handler).
+3. Document expected types clearly in `explain` output and trust the LLM.
+
+**Leaning toward:** Option 2 for v1, revisit if LLM errors are common.

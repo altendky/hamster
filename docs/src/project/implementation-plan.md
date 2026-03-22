@@ -136,6 +136,7 @@ and routing.
 | `content_type` | `str \| None` | From `Content-Type` header |
 | `accept` | `str \| None` | From `Accept` header |
 | `origin` | `str \| None` | From `Origin` header |
+| `host` | `str` | From `Host` header |
 | `session_id` | `str \| None` | From `Mcp-Session-Id` header |
 | `body` | `bytes` | Raw request body |
 
@@ -164,7 +165,7 @@ and routing.
 - `ServerCapabilities` defaults (`tools=ToolsCapability()`).
 - `ServerCapabilities(tools=None)` for tools-not-supported case.
 - `ServiceCallResult` construction for success and error cases.
-- `IncomingRequest` construction with all fields.
+- `IncomingRequest` construction with all fields (including `host`).
 
 ---
 
@@ -233,8 +234,9 @@ Validation rules:
   (client sent a response object; rejected as `INVALID_REQUEST`).
 - `jsonrpc` must be `"2.0"` --- `INVALID_REQUEST` if missing/wrong.
 - `method` must be a string --- `INVALID_REQUEST` if missing/wrong type.
-- `params` must be a dict if present (MCP uses only object params) ---
-  `INVALID_REQUEST` if wrong type; defaults to `{}` if absent.
+- `params` must be a dict if present --- `INVALID_REQUEST` if wrong type;
+  defaults to `{}` if absent.  Note: JSON-RPC 2.0 allows array params,
+  but MCP uses only object params; this parser is MCP-specific.
 - `params: null` treated as `{}`.
 - Has `id` (int, float, str, or null) --- `JsonRpcRequest`; no `id`
   key --- `JsonRpcNotification`.
@@ -390,7 +392,9 @@ what happened --- the transport's match/case is trivial.
 Covers all non-effect responses: initialization (200 + `Mcp-Session-Id`
 header), notification acknowledgment (202, no body), tool list (200),
 HTTP-level errors (405 for unsupported GET/SSE, 406, 415, 503 for
-unloaded), and JSON-RPC / protocol errors (400/404).
+unloaded), and JSON-RPC / protocol errors (400/404).  For JSON-RPC
+errors, the body is a proper JSON-RPC error response object:
+`{"jsonrpc": "2.0", "id": <id or null>, "error": {"code": ..., "message": ...}}`.
 
 **`RunEffects`** --- frozen dataclass.
 
@@ -422,6 +426,9 @@ then calls `manager.build_effect_response(request_id, result)` to get a
 ### Tests --- `_tests/test_events.py`
 
 - Construction of each dataclass with required fields.
+- `SessionExpired` construction with session_id string.
+- `FormatServiceResponse` construction (no fields, just verifies it's
+  instantiable).
 - Type union membership (`isinstance` checks).
 - Pattern matching on `ReceiveResult` covering `SendResponse` and
   `RunEffects`.
@@ -513,8 +520,20 @@ concatenated, lowercased).
 **`search()`:** case-insensitive substring matching against the
 pre-computed search text.  If `domain` is provided, only entries in that
 domain are searched.  Returns a formatted text summary of matching
-services (domain, service name, description, whether it has a target).
-Returns a "no results" message if nothing matches.
+services.  Returns a "no results" message if nothing matches.
+
+**Search result format:**
+
+```text
+Found 3 services matching "light":
+
+1. **light.turn_on** - Turn on a light
+2. **light.turn_off** - Turn off a light
+3. **light.toggle** - Toggle a light on/off
+```
+
+With domain filter: `Found 2 services in domain 'switch' matching "toggle":`.
+No results: `No services found matching "query".` (or with domain filter).
 
 **`explain()`:** looks up a single service by domain and service name.
 Returns the raw HA service description as formatted text: name,
@@ -649,6 +668,18 @@ message and `is_error=True`.
 - `hamster_services_schema` -> `Done` with selector description.
 - Unknown tool name -> `Done` with `is_error=True`.
 
+**Argument validation:**
+
+- `hamster_services_search` with missing `query` -> `Done(is_error=True)`.
+- `hamster_services_search` with `query` as integer -> `Done(is_error=True)`.
+- `hamster_services_explain` with missing `domain` -> `Done(is_error=True)`.
+- `hamster_services_explain` with missing `service` -> `Done(is_error=True)`.
+- `hamster_services_call` with missing `domain` -> `Done(is_error=True)`.
+- `hamster_services_call` with missing `service` -> `Done(is_error=True)`.
+- `hamster_services_call` with missing `data` -> `Done(is_error=True)`.
+- `hamster_services_call` with `target` as string -> `Done(is_error=True)`.
+- `hamster_services_schema` with missing `selector_type` -> `Done(is_error=True)`.
+
 **`resume()`:**
 
 - Success with data -> `Done` with JSON text.
@@ -673,7 +704,9 @@ by the transport.  Only `SessionManager` interacts with sessions.
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
+    IDLE --> IDLE : ping
     IDLE --> INITIALIZING : initialize request
+    INITIALIZING --> INITIALIZING : ping
     INITIALIZING --> ACTIVE : notifications/initialized
     ACTIVE --> ACTIVE : tools/list, tools/call, ping, notifications
     ACTIVE --> CLOSED : close()
@@ -785,7 +818,9 @@ class SessionManager:
 
 Default `session_id_factory` is `secrets.token_hex` (produces
 cryptographically random hex strings).  Tests inject a deterministic
-factory.
+factory.  The manager validates that factory-produced IDs contain only
+visible ASCII characters (0x21-0x7E) per MCP spec; invalid IDs raise
+`ValueError` at session creation time.
 
 Sessions are stored internally as `dict[str, MCPServerSession]` keyed
 by session ID, with a parallel `dict[str, float]` for last-activity
@@ -815,9 +850,14 @@ on wakeup without interpreting it.
 | `notify_services_changed` | `(now: float) -> None` | Record that services changed; starts debounce timer |
 | `check_wakeups` | `(now: float) -> tuple[list[SessionExpired], bool, WakeupRequest \| None]` | Expire idle sessions, check index regeneration debounce, compute next wakeup |
 | `handle_wakeup` | `(token: WakeupToken, now: float) -> None` | Core receives its own token back on wakeup (reserved for future use) |
-| `close_session` | `(session_id: str) -> bool` | Explicitly close a session |
+| `close_session` | `(session_id: str) -> bool` | Explicitly close and remove a session from storage; subsequent requests with this session ID will get 404 |
 
 **`receive_request()` logic:**
+
+*Implementation note:* This method has multiple validation and routing
+steps.  Consider extracting helper methods like `_validate_headers()`,
+`_parse_json_rpc()`, `_route_to_session()` for readability.  This is
+an implementation detail, not an API change.
 
 1. Check `http_method`:
     - `GET` -> `SendResponse(405)`.  Intentionally unsupported in v1;
@@ -830,9 +870,14 @@ on wakeup without interpreting it.
    ignored; only the media type portion is checked.
 3. Validate `Accept` header -> `SendResponse(406)` if not compatible
    with `application/json`.  Accepts `application/json`,
-   `application/*`, and `*/*` (see Q011).
-4. Validate `Origin` header -> deferred (see Q010).  Currently a
-   no-op placeholder.
+   `application/*`, `*/*`, and absent (`None`).  Missing `Accept` is
+   treated as `*/*` for developer convenience (curl, testing tools).
+   The MCP spec requires clients to send `Accept` but does not require
+   servers to enforce it.  See Q011.
+4. Validate `Origin` header (see D022).  If `Origin` is present, extract
+   the host portion and compare to the `Host` header.  If they don't
+   match, return `SendResponse(403)`.  If `Origin` is absent, allow
+   (non-browser clients don't send it).
 5. Parse JSON body (`json.loads`) -> `SendResponse(400)` with
    `PARSE_ERROR` on failure.
 6. `parse_batch(body)` (JSON-RPC validation):
@@ -849,8 +894,9 @@ on wakeup without interpreting it.
     - Unknown session ID -> `SendResponse(404)`.
     - Known session ID -> update last-activity, delegate to session.
 8. Wrap `SessionResult` into `SendResponse` or `RunEffects` with
-   appropriate status, headers (`Content-Type`, `Mcp-Session-Id`), and
-   body.
+   appropriate status, headers, and body.  The `Mcp-Session-Id` header
+   is only included on the initialize response (per MCP spec); subsequent
+   responses include only `Content-Type`.
 
 **`build_effect_response()`:**
 
@@ -858,8 +904,8 @@ Session-independent.  Takes a `request_id` and `CallToolResult`, builds
 the JSON-RPC response using `build_tool_result_response()`, and wraps in
 `SendResponse(200)`.  Can be called even if the session has expired or
 been closed --- the response is built without consulting session state.
-The transport holds the session ID from the original request and includes
-it in response headers.
+Per MCP spec, the `Mcp-Session-Id` header is only required on the
+initialize response; `build_effect_response()` does not include it.
 
 **`check_wakeups()` logic:**
 
@@ -891,12 +937,16 @@ no mocks.  The entire protocol is testable with plain data.
 - Wrong `Content-Type` -> `SendResponse(415)`.
 - `Content-Type` with parameters (e.g. `application/json; charset=utf-8`)
   -> accepted.
-- `Accept` header absent (`accept=None`) -> `SendResponse(406)`.
+- `Accept` header absent (`accept=None`) -> accepted (treated as `*/*`).
 - `Accept` header empty string (`accept=""`) -> `SendResponse(406)`.
 - `Accept: text/html` (present but incompatible) -> `SendResponse(406)`.
 - `Accept: application/json` -> accepted.
 - `Accept: */*` -> accepted.
 - `Accept: application/*` -> accepted.
+- `Origin` absent -> accepted.
+- `Origin` present, matches `Host` -> accepted.
+- `Origin` present, does not match `Host` -> `SendResponse(403)`.
+- `Origin` with port, `Host` with matching port -> accepted.
 - Malformed JSON body -> `SendResponse(400)` with `PARSE_ERROR`.
 - Empty body `b""` -> `SendResponse(400)` with `PARSE_ERROR`.
 - Valid JSON that's not an object or array (e.g. `b'"hello"'`, `b"42"`)
@@ -940,12 +990,27 @@ no mocks.  The entire protocol is testable with plain data.
 - No session ID + non-init -> `SendResponse(400)`.
 - Unknown session ID -> `SendResponse(404)`.
 - Multiple independent sessions operate without interference.
+- `Mcp-Session-Id` header is present only on initialize response, not on
+  subsequent responses (tools/list, tools/call, etc.).
 
 **Index and tool management:**
 
 - `update_index()` replaces the service index.
 - `tools/list` always returns the 4 fixed tools from `TOOLS`.
 - Unknown tool name -> error response with `INVALID_PARAMS`.
+
+**Tool call parameter validation:**
+
+- `tools/call` with `params` missing `name` key -> `SessionError(INVALID_PARAMS)`.
+- `tools/call` with `params` missing `arguments` key -> `SessionError(INVALID_PARAMS)`.
+- `tools/call` with `params.name` as integer -> `SessionError(INVALID_PARAMS)`.
+- `tools/call` with `params.arguments` as string -> `SessionError(INVALID_PARAMS)`.
+
+**Programmatic session management:**
+
+- `close_session(valid_id)` returns `True`, subsequent request with that
+  ID -> `SendResponse(404)`.
+- `close_session(unknown_id)` returns `False`.
 
 **Effect response:**
 
@@ -976,6 +1041,13 @@ no mocks.  The entire protocol is testable with plain data.
 
 - Injected `session_id_factory` -> predictable IDs.
 - Injected `now` -> deterministic timeouts and debounce.
+
+**Session ID validation:**
+
+- Factory returning valid visible ASCII (e.g. `"abc123"`) -> accepted.
+- Factory returning ID with space (0x20) -> `ValueError`.
+- Factory returning ID with control character (e.g. `\n`) -> `ValueError`.
+- Factory returning ID with non-ASCII (e.g. `"café"`) -> `ValueError`.
 
 ---
 
@@ -1038,6 +1110,7 @@ async def handle(self, request: web.Request) -> web.Response:
         content_type=request.content_type,
         accept=request.headers.get("Accept"),
         origin=request.headers.get("Origin"),
+        host=request.host,
         session_id=request.headers.get("Mcp-Session-Id"),
         body=body,
     )
@@ -1053,8 +1126,21 @@ async def handle(self, request: web.Request) -> web.Response:
             return web.json_response(
                 data=resp.body, status=resp.status, headers=resp.headers)
         case list() as batch_results:
-            # Batch response: collect response bodies into JSON array
-            ...
+            # Batch response: process sequentially, collect bodies
+            bodies = []
+            for item in batch_results:
+                match item:
+                    case SendResponse(body=b) if b is not None:
+                        bodies.append(b)
+                    case RunEffects(request_id=rid, effect=effect):
+                        call_result = await self._run_effects(effect)
+                        resp = self._manager.build_effect_response(
+                            rid, call_result)
+                        bodies.append(resp.body)
+                    # SendResponse with body=None (notifications) omitted
+            if not bodies:
+                return web.Response(status=202)
+            return web.json_response(data=bodies, status=200)
 ```
 
 ### Effect dispatch loop
@@ -1089,6 +1175,13 @@ Single background `asyncio.Task` that manages all timed events.
   after `receive_request()` creates a new session or after
   `notify_services_changed()`).
 
+**Error handling:** The wakeup loop catches all exceptions, logs at ERROR
+level, and continues. A counter tracks consecutive failures; after 5
+consecutive failures, log at CRITICAL level to alert operators of
+persistent issues. The counter resets on any successful iteration. The
+loop should never crash — session expiry and index rebuild must remain
+operational.
+
 ### Tests --- `_tests/test_aiohttp.py`
 
 Tests use `aiohttp.test_utils.TestClient` --- full HTTP round-trips, no
@@ -1116,6 +1209,22 @@ effect dispatch.
 - Wakeup loop: sleeps, wakes on new session, wakes on
   `notify_activity()`, expires idle sessions, triggers index
   rebuild callback after debounce.
+- Batch with multiple `tools/call` requests: processed sequentially,
+  responses collected into JSON array.
+
+**Wakeup loop error resilience:**
+
+- Exception raised during `check_wakeups()` -> loop catches, logs ERROR,
+  continues running.
+- 5 consecutive exceptions -> logs CRITICAL, loop still continues.
+- Successful iteration after failures -> consecutive failure counter
+  resets.
+- Sessions still expire and index still rebuilds after transient errors.
+
+**Activity notification:**
+
+- `notify_activity()` wakes sleeping loop immediately (before scheduled
+  deadline).
 
 ---
 
@@ -1238,6 +1347,13 @@ the `AiohttpMCPTransport` instance.
 4. Build initial service index from
    `async_get_all_descriptions(hass)` (see D017).  Call
    `manager.update_index(ServiceIndex(descriptions))`.
+
+   **Error handling:** If `async_get_all_descriptions()` fails, retry
+   with exponential backoff (1s, 2s, 4s, 8s, capped at 15s). If all
+   retries fail, start with an empty `ServiceIndex` and log at WARNING.
+   The index will populate when services register and trigger
+   `EVENT_SERVICE_REGISTERED`, which initiates a rebuild via the
+   debounce mechanism.
 5. Listen for `EVENT_SERVICE_REGISTERED` / `EVENT_SERVICE_REMOVED`.
    On each event, call `manager.notify_services_changed(now)`.  The
    wakeup loop handles debouncing and triggers regeneration via a
@@ -1248,6 +1364,10 @@ the `AiohttpMCPTransport` instance.
    `manager.check_wakeups()` and invokes an index-rebuild callback
    (which calls `async_get_all_descriptions()` +
    `ServiceIndex(descriptions)` + `manager.update_index()`).
+
+   **Error handling during refresh:** If `async_get_all_descriptions()`
+   fails during a rebuild, keep the existing index, log at WARNING.
+   The debounce mechanism will retry on the next service event.
 7. Store `manager`, `transport`, and the background task in
    `hass.data[DOMAIN][entry.entry_id]`.
 
@@ -1270,6 +1390,23 @@ the `AiohttpMCPTransport` instance.
 - Service index built from descriptions.
 - `async_unload_entry` succeeds.
 - Service events trigger index rebuild.
+
+**Index build failure handling:**
+
+- `async_get_all_descriptions()` fails at startup -> retries with backoff.
+- All retries fail -> starts with empty `ServiceIndex`, logs WARNING.
+- `async_get_all_descriptions()` succeeds on retry -> index populated.
+- `async_get_all_descriptions()` fails during refresh -> existing index
+  preserved, logs WARNING.
+- Service event after refresh failure -> triggers another rebuild attempt.
+
+**Unload lifecycle:**
+
+- `async_unload_entry()` cancels wakeup background task cleanly (no
+  warnings, no lingering tasks).
+- Request after `async_unload_entry()` -> 503 response.
+- Event listeners are cleaned up (verify no lingering subscriptions by
+  checking `hass.bus` or using mock).
 
 **`test_http.py`:**
 
@@ -1315,3 +1452,12 @@ from hamster.component.config_flow import HamsterConfigFlow as ConfigFlow
 - Hassfest validation (already in CI).
 - HACS validation (already in CI).
 - `manifest.json` `requirements` version matches `pyproject.toml`.
+
+### Tests
+
+**Import smoke tests:**
+
+- `from custom_components.hamster import async_setup_entry, async_unload_entry`
+  succeeds and references the `hamster.component` functions.
+- `from custom_components.hamster.config_flow import ConfigFlow` succeeds
+  and references `hamster.component.config_flow.HamsterConfigFlow`.
