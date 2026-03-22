@@ -48,10 +48,10 @@ class TestToolDefinitions:
     def test_expected_tool_names(self) -> None:
         names = {t.name for t in TOOLS}
         assert names == {
-            "hamster_search",
-            "hamster_explain",
-            "hamster_call",
-            "hamster_schema",
+            "search",
+            "explain",
+            "call",
+            "schema",
         }
 
 
@@ -77,14 +77,14 @@ class TestCallTool:
 
     def test_search_returns_done(self) -> None:
         registry = self._make_registry()
-        result = call_tool("hamster_search", {"query": "light"}, registry, user_id=None)
+        result = call_tool("search", {"query": "light"}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.content[0].text  # type: ignore[union-attr]
 
     def test_search_with_path_filter(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_search",
+            "search",
             {"query": "turn", "path_filter": "services"},
             registry,
             user_id=None,
@@ -96,7 +96,7 @@ class TestCallTool:
     def test_search_with_domain_filter(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_search",
+            "search",
             {"query": "turn", "path_filter": "services/light"},
             registry,
             user_id=None,
@@ -110,7 +110,7 @@ class TestCallTool:
     def test_explain_returns_done(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_explain",
+            "explain",
             {"path": "services/light.turn_on"},
             registry,
             user_id=None,
@@ -121,7 +121,7 @@ class TestCallTool:
     def test_explain_unknown_command_error(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_explain",
+            "explain",
             {"path": "services/light.nonexistent"},
             registry,
             user_id=None,
@@ -132,7 +132,7 @@ class TestCallTool:
     def test_explain_unknown_group_error(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_explain",
+            "explain",
             {"path": "unknown/foo"},
             registry,
             user_id=None,
@@ -143,7 +143,7 @@ class TestCallTool:
     def test_explain_invalid_path_format_error(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_explain",
+            "explain",
             {"path": "nogroup"},
             registry,
             user_id=None,
@@ -156,7 +156,7 @@ class TestCallTool:
     def test_explain_empty_path_error(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_explain",
+            "explain",
             {"path": ""},
             registry,
             user_id=None,
@@ -167,7 +167,7 @@ class TestCallTool:
     def test_call_valid_service_returns_service_call(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_call",
+            "call",
             {
                 "path": "services/light.turn_on",
                 "arguments": {
@@ -189,7 +189,7 @@ class TestCallTool:
     def test_call_unknown_service_error(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_call",
+            "call",
             {"path": "services/light.nonexistent", "arguments": {}},
             registry,
             user_id=None,
@@ -200,7 +200,7 @@ class TestCallTool:
     def test_call_unknown_group_error(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_call",
+            "call",
             {"path": "unknown/foo", "arguments": {}},
             registry,
             user_id=None,
@@ -211,7 +211,7 @@ class TestCallTool:
     def test_call_invalid_path_format_error(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_call",
+            "call",
             {"path": "nogroup"},
             registry,
             user_id=None,
@@ -222,7 +222,7 @@ class TestCallTool:
     def test_call_missing_arguments_uses_empty(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_call",
+            "call",
             {"path": "services/light.turn_on"},
             registry,
             user_id="test-user",
@@ -234,7 +234,7 @@ class TestCallTool:
     def test_call_arguments_wrong_type_error(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_call",
+            "call",
             {"path": "services/light.turn_on", "arguments": "invalid"},
             registry,
             user_id=None,
@@ -244,9 +244,7 @@ class TestCallTool:
 
     def test_search_empty_registry(self) -> None:
         registry = GroupRegistry()
-        result = call_tool(
-            "hamster_search", {"query": "anything"}, registry, user_id=None
-        )
+        result = call_tool("search", {"query": "anything"}, registry, user_id=None)
         assert isinstance(result, Done)
         text = result.result.content[0].text  # type: ignore[union-attr]
         assert "No commands found" in text
@@ -254,7 +252,7 @@ class TestCallTool:
     def test_schema_returns_done(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_schema",
+            "schema",
             {"path": "services/selector/boolean"},
             registry,
             user_id=None,
@@ -282,7 +280,7 @@ class TestCallTool:
         )
         registry.register(group)
         result = call_tool(
-            "hamster_schema",
+            "schema",
             {"path": "services/light.turn_on"},
             registry,
             user_id=None,
@@ -294,7 +292,7 @@ class TestCallTool:
     def test_schema_unknown_path_error(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_schema",
+            "schema",
             {"path": "services/unknown.service"},
             registry,
             user_id=None,
@@ -320,20 +318,20 @@ class TestCallToolArgumentValidation:
 
     def test_search_missing_query(self) -> None:
         registry = self._make_registry()
-        result = call_tool("hamster_search", {}, registry, user_id=None)
+        result = call_tool("search", {}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
     def test_search_query_wrong_type(self) -> None:
         registry = self._make_registry()
-        result = call_tool("hamster_search", {"query": 123}, registry, user_id=None)
+        result = call_tool("search", {"query": 123}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
     def test_search_path_filter_wrong_type(self) -> None:
         registry = self._make_registry()
         result = call_tool(
-            "hamster_search",
+            "search",
             {"query": "test", "path_filter": 123},
             registry,
             user_id=None,
@@ -343,37 +341,37 @@ class TestCallToolArgumentValidation:
 
     def test_explain_missing_path(self) -> None:
         registry = self._make_registry()
-        result = call_tool("hamster_explain", {}, registry, user_id=None)
+        result = call_tool("explain", {}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
     def test_explain_path_wrong_type(self) -> None:
         registry = self._make_registry()
-        result = call_tool("hamster_explain", {"path": 123}, registry, user_id=None)
+        result = call_tool("explain", {"path": 123}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
     def test_call_missing_path(self) -> None:
         registry = self._make_registry()
-        result = call_tool("hamster_call", {}, registry, user_id=None)
+        result = call_tool("call", {}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
     def test_call_path_wrong_type(self) -> None:
         registry = self._make_registry()
-        result = call_tool("hamster_call", {"path": 123}, registry, user_id=None)
+        result = call_tool("call", {"path": 123}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
     def test_schema_missing_path(self) -> None:
         registry = self._make_registry()
-        result = call_tool("hamster_schema", {}, registry, user_id=None)
+        result = call_tool("schema", {}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 
     def test_schema_path_wrong_type(self) -> None:
         registry = self._make_registry()
-        result = call_tool("hamster_schema", {"path": 123}, registry, user_id=None)
+        result = call_tool("schema", {"path": 123}, registry, user_id=None)
         assert isinstance(result, Done)
         assert result.result.is_error
 

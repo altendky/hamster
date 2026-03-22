@@ -1739,19 +1739,21 @@ On success, returns `ServiceCall(domain, service, target, data, continuation)`.
 
 ## Stage 11 --- Tool Generalization
 
-Rename tools from `hamster_services_*` to `hamster_*` with path-based
-addressing.
+Rename tools from `hamster_services_*` to generic names with path-based
+addressing. MCP clients prefix tool names with the server name ("hamster"),
+so tools are named `search`, `explain`, `call`, `schema` (appearing as
+`hamster_search`, etc. to clients).
 
 ### Renamed tool definitions
 
 | Old Name | New Name | Changes |
 | --- | --- | --- |
-| `hamster_services_search` | `hamster_search` | Add optional `path_filter` parameter |
-| `hamster_services_explain` | `hamster_explain` | Replace `domain`+`service` with `path` |
-| `hamster_services_call` | `hamster_call` | Replace `domain`+`service` with `path` |
-| `hamster_services_schema` | `hamster_schema` | Replace `selector_type` with `path` (group-aware) |
+| `hamster_services_search` | `search` | Add optional `path_filter` parameter |
+| `hamster_services_explain` | `explain` | Replace `domain`+`service` with `path` |
+| `hamster_services_call` | `call` | Replace `domain`+`service` with `path` |
+| `hamster_services_schema` | `schema` | Replace `selector_type` with `path` (group-aware) |
 
-**`hamster_search`:**
+**`search`:**
 
 | Property | Type | Required |
 | --- | --- | --- |
@@ -1761,7 +1763,7 @@ addressing.
 Description: "Search for commands across all groups.  Use path_filter to
 narrow scope (e.g., `services`, `services/light`, `hass/config`)."
 
-**`hamster_explain`:**
+**`explain`:**
 
 | Property | Type | Required |
 | --- | --- | --- |
@@ -1770,7 +1772,7 @@ narrow scope (e.g., `services`, `services/light`, `hass/config`)."
 Description: "Get detailed description of a command.  Path format:
 `group/command` (e.g., `services/light.turn_on`, `hass/get_states`)."
 
-**`hamster_call`:**
+**`call`:**
 
 | Property | Type | Required |
 | --- | --- | --- |
@@ -1785,7 +1787,7 @@ Note: The `target`/`data` split for services moves into how
 The MCP tool interface becomes uniform; each group parses arguments its
 own way.
 
-**`hamster_schema`:**
+**`schema`:**
 
 | Property | Type | Required |
 | --- | --- | --- |
@@ -1820,25 +1822,25 @@ rationale.
 | Condition | Behavior |
 | --- | --- |
 | Unknown tool name | Return `Done(is_error=True)` with error message |
-| `hamster_search` missing `query` | Return `Done(is_error=True)` |
-| `hamster_search` with non-string `query` | Return `Done(is_error=True)` |
-| `hamster_explain` missing `path` | Return `Done(is_error=True)` |
-| `hamster_explain` with path not containing `/` | Return `Done(is_error=True)` |
-| `hamster_explain` with unknown group | Return `Done(is_error=True)` |
-| `hamster_explain` with unknown command | Return `Done(is_error=True)` |
-| `hamster_call` missing `path` | Return `Done(is_error=True)` |
-| `hamster_call` with `arguments` not an object | Return `Done(is_error=True)` |
-| `hamster_schema` missing `path` | Return `Done(is_error=True)` |
+| `search` missing `query` | Return `Done(is_error=True)` |
+| `search` with non-string `query` | Return `Done(is_error=True)` |
+| `explain` missing `path` | Return `Done(is_error=True)` |
+| `explain` with path not containing `/` | Return `Done(is_error=True)` |
+| `explain` with unknown group | Return `Done(is_error=True)` |
+| `explain` with unknown command | Return `Done(is_error=True)` |
+| `call` missing `path` | Return `Done(is_error=True)` |
+| `call` with `arguments` not an object | Return `Done(is_error=True)` |
+| `schema` missing `path` | Return `Done(is_error=True)` |
 
 ### Tests --- `_tests/test_tools.py` (updated)
 
 **Tool definitions:**
 
 - `TOOLS` has exactly 4 entries.
-- Tool names are `hamster_search`, `hamster_explain`, `hamster_call`, `hamster_schema`.
+- Tool names are `search`, `explain`, `call`, `schema`.
 - Each tool has valid `input_schema`.
 
-**`hamster_search`:**
+**`search`:**
 
 - With no filter, searches all groups.
 - With `path_filter="services"`, searches only services.
@@ -1848,7 +1850,7 @@ rationale.
 - Non-string `query` returns `Done(is_error=True)`.
 - Non-string `path_filter` returns `Done(is_error=True)`.
 
-**`hamster_explain`:**
+**`explain`:**
 
 - `"services/light.turn_on"` returns service description.
 - `"hass/get_states"` returns hass command description.
@@ -1858,7 +1860,7 @@ rationale.
 - Missing `path` returns `Done(is_error=True)`.
 - Non-string `path` returns `Done(is_error=True)`.
 
-**`hamster_call`:**
+**`call`:**
 
 - `"services/light.turn_on"` with valid args returns `ServiceCall` effect.
 - `"hass/get_states"` with valid args returns `HassCommand` effect.
@@ -1868,7 +1870,7 @@ rationale.
 - `arguments` as string returns `Done(is_error=True)`.
 - Missing `arguments` defaults to `{}`.
 
-**`hamster_schema`:**
+**`schema`:**
 
 - `"services/selector/duration"` returns selector description.
 - `"hass/get_states"` returns hass command schema.
