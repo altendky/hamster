@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 TOOLS: tuple[Tool, ...] = (
     Tool(
-        name="hamster_search",
+        name="search",
         description=(
             "Search for commands across all groups. Use path_filter to narrow "
             "scope (e.g., 'services', 'services/light', 'hass/config')."
@@ -58,7 +58,7 @@ TOOLS: tuple[Tool, ...] = (
         },
     ),
     Tool(
-        name="hamster_explain",
+        name="explain",
         description=(
             "Get detailed description of a command. Path format: "
             "group/command (e.g., 'services/light.turn_on', 'hass/get_states')."
@@ -78,7 +78,7 @@ TOOLS: tuple[Tool, ...] = (
         },
     ),
     Tool(
-        name="hamster_call",
+        name="call",
         description=(
             "Execute a command. Path format: group/command. "
             "Arguments are command-specific."
@@ -102,7 +102,7 @@ TOOLS: tuple[Tool, ...] = (
         },
     ),
     Tool(
-        name="hamster_schema",
+        name="schema",
         description=(
             "Get schema/type information for a command or type. "
             "For services, use 'services/selector/TYPE' "
@@ -153,7 +153,7 @@ def call_tool(
     """Dispatch a tool call by name.
 
     Args:
-        name: Tool name (hamster_search, hamster_explain, hamster_call, hamster_schema)
+        name: Tool name (search, explain, call, schema)
         arguments: Tool arguments
         registry: Group registry with registered source groups
         user_id: Authenticated user ID for authorization
@@ -161,19 +161,19 @@ def call_tool(
     Returns:
         ToolEffect (Done for immediate results, effect for I/O)
     """
-    if name == "hamster_search":
+    if name == "search":
         return _call_search(arguments, registry)
-    if name == "hamster_explain":
+    if name == "explain":
         return _call_explain(arguments, registry)
-    if name == "hamster_call":
+    if name == "call":
         return _call_call(arguments, registry, user_id)
-    if name == "hamster_schema":
+    if name == "schema":
         return _call_schema(arguments, registry)
     return _make_error(f"Unknown tool: {name}")
 
 
 def _call_search(arguments: dict[str, object], registry: GroupRegistry) -> ToolEffect:
-    """Handle hamster_search."""
+    """Handle search tool."""
     query = arguments.get("query")
     if not isinstance(query, str):
         return _make_error("Missing or invalid 'query' parameter (must be a string)")
@@ -187,7 +187,7 @@ def _call_search(arguments: dict[str, object], registry: GroupRegistry) -> ToolE
 
 
 def _call_explain(arguments: dict[str, object], registry: GroupRegistry) -> ToolEffect:
-    """Handle hamster_explain."""
+    """Handle explain tool."""
     path = arguments.get("path")
     if not isinstance(path, str):
         return _make_error("Missing or invalid 'path' parameter (must be a string)")
@@ -211,7 +211,7 @@ def _call_explain(arguments: dict[str, object], registry: GroupRegistry) -> Tool
 def _call_call(
     arguments: dict[str, object], registry: GroupRegistry, user_id: str | None
 ) -> ToolEffect:
-    """Handle hamster_call."""
+    """Handle call tool."""
     path = arguments.get("path")
     if not isinstance(path, str):
         return _make_error("Missing or invalid 'path' parameter (must be a string)")
@@ -236,7 +236,7 @@ def _call_call(
 
 
 def _call_schema(arguments: dict[str, object], registry: GroupRegistry) -> ToolEffect:
-    """Handle hamster_schema."""
+    """Handle schema tool."""
     path = arguments.get("path")
     if not isinstance(path, str):
         return _make_error("Missing or invalid 'path' parameter (must be a string)")

@@ -563,13 +563,16 @@ instance).  It accurately represents that these are core HA commands.
 
 ## D030: Tool Renaming for Multi-Source Architecture
 
-**Decision:** Rename tools from `hamster_services_*` to `hamster_*` with
+**Decision:** Rename tools from `hamster_services_*` to generic names with
 path-based addressing:
 
-- `hamster_services_search` → `hamster_search`
-- `hamster_services_explain` → `hamster_explain`
-- `hamster_services_call` → `hamster_call`
-- `hamster_services_schema` → `hamster_schema`
+- `hamster_services_search` → `search`
+- `hamster_services_explain` → `explain`
+- `hamster_services_call` → `call`
+- `hamster_services_schema` → `schema`
+
+MCP clients prefix tool names with the server name ("hamster"), so clients
+see these as `hamster_search`, `hamster_explain`, etc.
 
 **Rationale:** The multi-source architecture (D024) uses a unified
 `<group>/<path>` addressing scheme.  Generic tool names with path
@@ -592,10 +595,10 @@ base class allows groups to be implemented independently without
 inheritance coupling.  The method set covers the four operations needed
 by the MCP tools:
 
-- `search()` for `hamster_search`
-- `explain()` for `hamster_explain`
-- `schema()` for `hamster_schema`
-- `has_command()` + `parse_call_args()` for `hamster_call`
+- `search()` for `search`
+- `explain()` for `explain`
+- `schema()` for `schema`
+- `has_command()` + `parse_call_args()` for `call`
 
 The `available` property (default `True`) allows groups like `supervisor`
 to indicate they are unavailable on certain installations.

@@ -302,7 +302,7 @@ class TestMCPServerSessionToolsCall:
         msg = JsonRpcRequest(
             id=2,
             method="tools/call",
-            params={"name": "hamster_search", "arguments": {"query": "light"}},
+            params={"name": "search", "arguments": {"query": "light"}},
         )
         result = session.handle(msg, registry, user_id=None)
         assert isinstance(result, SessionToolCall)
@@ -321,9 +321,7 @@ class TestMCPServerSessionToolsCall:
         from hamster.mcp._core.jsonrpc import JsonRpcRequest
 
         session, registry = self._make_active_session()
-        msg = JsonRpcRequest(
-            id=2, method="tools/call", params={"name": "hamster_search"}
-        )
+        msg = JsonRpcRequest(id=2, method="tools/call", params={"name": "search"})
         result = session.handle(msg, registry, user_id=None)
         # Should still work - arguments defaults to {}
         assert isinstance(result, SessionToolCall)
@@ -711,7 +709,7 @@ class TestSessionManagerToolCallParams:
     def test_arguments_wrong_type(self) -> None:
         manager, sess = self._make_active_manager()
         body = make_jsonrpc_request(
-            "tools/call", {"name": "hamster_search", "arguments": "string"}
+            "tools/call", {"name": "search", "arguments": "string"}
         )
         result = manager.receive_request(
             make_request(body=body, session_id=sess), now=0.0
@@ -902,7 +900,7 @@ class TestSessionManagerConcurrency:
         body1 = make_jsonrpc_request(
             "tools/call",
             {
-                "name": "hamster_call",
+                "name": "call",
                 "arguments": {"path": "services/light.turn_on"},
             },
             request_id=1,
@@ -910,7 +908,7 @@ class TestSessionManagerConcurrency:
         body2 = make_jsonrpc_request(
             "tools/call",
             {
-                "name": "hamster_call",
+                "name": "call",
                 "arguments": {"path": "services/light.turn_on"},
             },
             request_id=2,
@@ -1016,7 +1014,7 @@ class TestHappyPath:
         # 4. Call tool
         call_body = make_jsonrpc_request(
             "tools/call",
-            {"name": "hamster_search", "arguments": {"query": "light"}},
+            {"name": "search", "arguments": {"query": "light"}},
         )
         call_result = manager.receive_request(
             make_request(body=call_body, session_id="test-session-id"), now=0.0

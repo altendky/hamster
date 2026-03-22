@@ -249,15 +249,15 @@ class TestCompleteFlow:
         tools = data["result"]["tools"]
         assert len(tools) == 4
         tool_names = {t["name"] for t in tools}
-        assert "hamster_call" in tool_names
+        assert "call" in tool_names
 
-        # tools/call - hamster_search (no I/O)
+        # tools/call - search (no I/O)
         resp = await client.post(
             "/mcp",
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_search",
+                    "name": "search",
                     "arguments": {"query": "light"},
                 },
             ),
@@ -273,13 +273,13 @@ class TestCompleteFlow:
         assert len(content) == 1
         assert "light" in content[0]["text"].lower()
 
-        # tools/call - hamster_call (with I/O)
+        # tools/call - call (with I/O)
         resp = await client.post(
             "/mcp",
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_call",
+                    "name": "call",
                     "arguments": {
                         "path": "services/light.turn_on",
                         "arguments": {
@@ -359,13 +359,13 @@ class TestEffectDispatch:
         """Done effect returns result immediately without I/O."""
         session_id = await _init_session(client)
 
-        # hamster_search returns Done immediately
+        # search returns Done immediately
         resp = await client.post(
             "/mcp",
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_search",
+                    "name": "search",
                     "arguments": {"query": "light"},
                 },
             ),
@@ -393,7 +393,7 @@ class TestEffectDispatch:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_call",
+                    "name": "call",
                     "arguments": {
                         "path": "services/light.turn_on",
                         "arguments": {},
@@ -427,7 +427,7 @@ class TestEffectDispatch:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_call",
+                    "name": "call",
                     "arguments": {
                         "path": "services/light.turn_on",
                         "arguments": {},
@@ -495,7 +495,7 @@ class TestBatchRequests:
             _make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_call",
+                    "name": "call",
                     "arguments": {"path": "services/light.turn_on", "arguments": {}},
                 },
                 request_id=1,
@@ -503,7 +503,7 @@ class TestBatchRequests:
             _make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_call",
+                    "name": "call",
                     "arguments": {"path": "services/light.turn_off", "arguments": {}},
                 },
                 request_id=2,
@@ -796,7 +796,7 @@ class TestSupervisorCallDispatch:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_call",
+                    "name": "call",
                     "arguments": {
                         "path": "supervisor/core/info",
                         "arguments": {},
@@ -829,7 +829,7 @@ class TestSupervisorCallDispatch:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_call",
+                    "name": "call",
                     "arguments": {
                         "path": "supervisor/core/logs",
                         "arguments": {},
@@ -860,7 +860,7 @@ class TestSupervisorCallDispatch:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_call",
+                    "name": "call",
                     "arguments": {
                         "path": "supervisor/addons/{slug}/info",
                         "arguments": {"slug": "my_addon"},
@@ -894,7 +894,7 @@ class TestSupervisorCallDispatch:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_call",
+                    "name": "call",
                     "arguments": {
                         "path": "supervisor/core/info",
                         "arguments": {},
@@ -933,7 +933,7 @@ class TestSupervisorCallDispatch:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_call",
+                    "name": "call",
                     "arguments": {
                         "path": "supervisor/core/logs",
                         "arguments": {},
@@ -968,7 +968,7 @@ class TestSupervisorCallDispatch:
             json=_make_jsonrpc(
                 "tools/call",
                 {
-                    "name": "hamster_call",
+                    "name": "call",
                     "arguments": {
                         "path": "supervisor/core/info",
                         "arguments": {},
