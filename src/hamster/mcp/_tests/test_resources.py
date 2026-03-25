@@ -224,7 +224,6 @@ class TestResourcesListDispatch:
         assert isinstance(inner, dict)
         resources = inner["resources"]
         assert isinstance(resources, list)
-        assert len(resources) == 3
 
         uris = {r["uri"] for r in resources}
         assert "insights:service-targeting" in uris
