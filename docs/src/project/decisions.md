@@ -194,8 +194,8 @@ The I/O layer sleeps until the deadline and hands the token back.  This keeps
 all timing logic in the pure core while allowing future wakeup reasons without
 changing the I/O layer.
 
-See the [Implementation Plan](implementation-plan.md) Stage 5 for the full
-`SessionManager` API.
+See `src/hamster/mcp/_core/session.py` for the full `SessionManager`
+implementation.
 
 **Rationale:** This follows the sans-IO principle: all routing, timeout, and
 state-machine logic is pure, deterministic, and testable without async.

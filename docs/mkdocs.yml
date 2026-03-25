@@ -44,7 +44,6 @@ nav:
   - Project Management:
       - Decisions: project/decisions.md
       - Open Questions: project/open-questions.md
-      - Implementation Plan: project/implementation-plan.md
 
 markdown_extensions:
   - tables

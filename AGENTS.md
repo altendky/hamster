@@ -6,7 +6,6 @@ For project requirements, architecture, and conventions, see:
 - [Architecture](docs/src/project/architecture.md)
 - [Principles](docs/src/project/principles.md)
 - [Data Flow](docs/src/project/data-flow.md)
-- [Implementation Plan](docs/src/project/implementation-plan.md)
 - [Decisions](docs/src/project/decisions.md)
 
 ## Development Workflow
