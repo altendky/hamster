@@ -12,9 +12,9 @@ all available services and their schemas automatically.
 
 ## Status
 
-**Pre-alpha.** Not yet functional.
+**In development.** Substantially complete --- ready for testing and feedback.
 
-## Key Features (Planned)
+## Key Features
 
 - **Dynamic tool generation** from `hass.services.async_services()` --- no
   static tool definitions
@@ -24,6 +24,26 @@ all available services and their schemas automatically.
 - **Sans-IO protocol core** --- fully testable without mocking
 - **Full admin access** --- services, states, registries, automations,
   dashboards, supervisor (when available)
+
+## Installation
+
+### HACS (Recommended)
+
+1. Install [HACS](https://hacs.xyz/) if you haven't already.
+2. Add this repository as a custom repository in HACS:
+   - Go to HACS → Integrations → Menu (three dots) → Custom repositories
+   - URL: `https://github.com/altendky/hamster`
+   - Category: Integration
+3. Search for "Hamster MCP" in HACS and install it.
+4. Restart Home Assistant.
+5. Add the integration via Settings → Devices & Services → Add Integration → Hamster MCP.
+
+### Manual Installation
+
+1. Copy the `custom_components/hamster` directory to your Home Assistant
+   `config/custom_components/` directory.
+2. Restart Home Assistant.
+3. Add the integration via Settings → Devices & Services → Add Integration → Hamster MCP.
 
 ## Documentation
 
