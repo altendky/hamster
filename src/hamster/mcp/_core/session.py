@@ -633,6 +633,9 @@ class SessionManager:
             raise ValueError(f"Invalid session ID from factory: {session_id!r}")
 
         # Build per-session instructions via the factory
+        # TODO: When a sans-IO tracing/logging tool is available, use it
+        #       to report factory errors instead of letting them propagate
+        #       unobserved through the I/O layer.
         instructions = (
             self._instructions_factory(user_id, user_name)
             if self._instructions_factory is not None
