@@ -7,7 +7,7 @@ common pitfalls.
 
 Every entity in Home Assistant has an ID of the form:
 
-```
+```text
 <domain>.<object_id>
 ```
 
@@ -18,6 +18,7 @@ Every entity in Home Assistant has an ID of the form:
   `front_door_lock`).
 
 Examples:
+
 - `light.living_room`
 - `sensor.outdoor_temperature`
 - `binary_sensor.front_door`
@@ -28,6 +29,7 @@ Examples:
 ## Naming Conventions
 
 Object IDs are **slugified** from the entity or device name:
+
 - Lowercase
 - Spaces and special characters replaced with underscores
 - Consecutive underscores collapsed
@@ -50,6 +52,7 @@ The most reliable way to discover entity IDs is via the entity registry:
 ```
 
 This returns all registered entities with fields including:
+
 - `entity_id` --- The canonical ID (e.g. `light.living_room`)
 - `name` --- User-assigned friendly name (may differ from the default)
 - `original_name` --- The name provided by the integration
@@ -72,6 +75,7 @@ To see all entities with their current state and attributes:
 ```
 
 Each entry includes:
+
 - `entity_id`
 - `state` --- Current state value (e.g. `"on"`, `"off"`, `"23.5"`,
   `"unavailable"`)
@@ -83,6 +87,7 @@ Each entry includes:
 ## Special States
 
 All entities can have these special state values:
+
 - `unavailable` --- The entity exists but cannot be reached
 - `unknown` --- The entity exists but its state is not yet known
 
@@ -91,6 +96,7 @@ These are not errors; they indicate the entity's current availability.
 ## Entity Categories
 
 Entities have an optional `entity_category` that indicates their role:
+
 - **(none)** --- Primary entity, shown in the UI by default
 - `config` --- Configuration entity (e.g. a setting toggle)
 - `diagnostic` --- Diagnostic entity (e.g. signal strength, firmware version)

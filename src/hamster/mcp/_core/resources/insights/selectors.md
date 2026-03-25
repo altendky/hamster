@@ -116,6 +116,7 @@ Expects: An array of three integers `[R, G, B]`, each 0--255.
 ```
 
 Expects:
+
 - `date`: `"YYYY-MM-DD"` string
 - `time`: `"HH:MM:SS"` string
 - `datetime`: `"YYYY-MM-DD HH:MM:SS"` string
