@@ -27,8 +27,8 @@ from hamster.mcp._core.types import (
 class TestToolDefinitions:
     """Tests for TOOLS constant."""
 
-    def test_exactly_four_tools(self) -> None:
-        assert len(TOOLS) == 4
+    def test_exactly_six_tools(self) -> None:
+        assert len(TOOLS) == 6
 
     def test_all_tools_have_required_fields(self) -> None:
         for tool in TOOLS:
@@ -52,6 +52,8 @@ class TestToolDefinitions:
             "explain",
             "call",
             "schema",
+            "list_resources",
+            "read_resource",
         }
 
 

@@ -69,10 +69,10 @@ async def test_async_unload_entry_succeeds(
     assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
 
 
-async def test_tool_list_returns_four_tools(
+async def test_tool_list_returns_six_tools(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry
 ) -> None:
-    """Test that tools/list returns the 4 fixed tools."""
+    """Test that tools/list returns the 6 fixed tools."""
     with patch(
         "hamster.component.async_get_all_descriptions",
         new_callable=AsyncMock,
@@ -84,10 +84,10 @@ async def test_tool_list_returns_four_tools(
     # Verify data was stored
     assert mock_config_entry.entry_id in hass.data[DOMAIN]
 
-    # Check that the 4 tools are available
+    # Check that the 6 tools are available
     from hamster.mcp._core.tools import TOOLS
 
-    assert len(TOOLS) == 4
+    assert len(TOOLS) == 6
 
 
 async def test_registry_built_from_descriptions(

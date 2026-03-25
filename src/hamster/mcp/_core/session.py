@@ -27,13 +27,24 @@ from .jsonrpc import (
     JsonRpcRequest,
     JsonRpcResponse,
     build_initialize_response,
+    build_resource_list_response,
+    build_resource_read_response,
     build_tool_list_response,
     build_tool_result_response,
     make_error_response,
     parse_batch,
 )
+from .resources import RESOURCES as _RESOURCE_ENTRIES
+from .resources import read_resource as _read_resource_entry
 from .tools import TOOLS, call_tool
-from .types import CallToolResult, JsonRpcId, ServerCapabilities, ServerInfo
+from .types import (
+    CallToolResult,
+    JsonRpcId,
+    Resource,
+    ResourceContents,
+    ServerCapabilities,
+    ServerInfo,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -238,6 +249,12 @@ class MCPServerSession:
         if method == "tools/call":
             return self._handle_tools_call(message, registry, user_id)
 
+        if method == "resources/list":
+            return self._handle_resources_list(message)
+
+        if method == "resources/read":
+            return self._handle_resources_read(message)
+
         # Unknown method
         return SessionError(
             code=METHOD_NOT_FOUND,
@@ -286,6 +303,55 @@ class MCPServerSession:
         # Dispatch to tool
         effect = call_tool(name, arguments, registry, user_id)
         return SessionToolCall(request_id=message.id, effect=effect)
+
+    def _handle_resources_list(
+        self,
+        message: JsonRpcRequest,
+    ) -> SessionResult:
+        """Handle resources/list request."""
+        mcp_resources = tuple(
+            Resource(
+                uri=entry.uri,
+                name=entry.name,
+                description=entry.description,
+                mime_type="text/markdown",
+            )
+            for entry in _RESOURCE_ENTRIES
+        )
+        return SessionResponse(
+            body=build_resource_list_response(message.id, mcp_resources)
+        )
+
+    def _handle_resources_read(
+        self,
+        message: JsonRpcRequest,
+    ) -> SessionResult:
+        """Handle resources/read request."""
+        params = message.params
+        uri = params.get("uri")
+        if not isinstance(uri, str):
+            return SessionError(
+                code=INVALID_PARAMS,
+                message="Missing or invalid 'uri' in resources/read params",
+                request_id=message.id,
+            )
+
+        entry = _read_resource_entry(uri)
+        if entry is None:
+            return SessionError(
+                code=INVALID_PARAMS,
+                message=f"Resource not found: {uri}",
+                request_id=message.id,
+            )
+
+        contents = (
+            ResourceContents(
+                uri=entry.uri,
+                text=entry.content,
+                mime_type="text/markdown",
+            ),
+        )
+        return SessionResponse(body=build_resource_read_response(message.id, contents))
 
     def close(self) -> None:
         """Close the session."""

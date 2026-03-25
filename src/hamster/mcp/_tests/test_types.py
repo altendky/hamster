@@ -143,6 +143,14 @@ class TestServerCapabilities:
         assert cap.tools is not None
         assert cap.tools.list_changed is False
 
+    def test_default_resources_capability(self) -> None:
+        from hamster.mcp._core.types import ResourcesCapability
+
+        cap = ServerCapabilities()
+        assert cap.resources == ResourcesCapability()
+        assert cap.resources is not None
+        assert cap.resources.list_changed is False
+
     def test_tools_with_list_changed(self) -> None:
         cap = ServerCapabilities(tools=ToolsCapability(list_changed=True))
         assert cap.tools is not None
@@ -151,6 +159,10 @@ class TestServerCapabilities:
     def test_tools_none_not_supported(self) -> None:
         cap = ServerCapabilities(tools=None)
         assert cap.tools is None
+
+    def test_resources_none_not_supported(self) -> None:
+        cap = ServerCapabilities(resources=None)
+        assert cap.resources is None
 
     def test_frozen(self) -> None:
         cap = ServerCapabilities()

@@ -18,6 +18,8 @@ from .events import (
     FormatSupervisorResponse,
     ToolEffect,
 )
+from .resources import RESOURCES as _RESOURCE_ENTRIES
+from .resources import read_resource as _read_resource_entry
 from .types import (
     CallToolResult,
     HassCommandResult,
@@ -123,6 +125,40 @@ TOOLS: tuple[Tool, ...] = (
             "required": ["path"],
         },
     ),
+    Tool(
+        name="list_resources",
+        description=(
+            "List available resource documents with practical guidance "
+            "for working with Home Assistant entities, services, and "
+            "configurations. Returns URIs that can be read with "
+            "read_resource."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+    Tool(
+        name="read_resource",
+        description=(
+            "Read a specific resource document by URI. Use "
+            "list_resources to discover available URIs."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "uri": {
+                    "type": "string",
+                    "description": (
+                        "The URI of the resource to read "
+                        "(e.g., 'insights:service-targeting'). "
+                        "Use list_resources to discover available URIs."
+                    ),
+                },
+            },
+            "required": ["uri"],
+        },
+    ),
 )
 
 
@@ -169,6 +205,10 @@ def call_tool(
         return _call_call(arguments, registry, user_id)
     if name == "schema":
         return _call_schema(arguments, registry)
+    if name == "list_resources":
+        return _call_list_resources()
+    if name == "read_resource":
+        return _call_read_resource(arguments)
     return _make_error(f"Unknown tool: {name}")
 
 
@@ -233,6 +273,33 @@ def _call_call(
 
     group, in_group_path = resolved
     return group.parse_call_args(in_group_path, call_arguments, user_id)
+
+
+def _call_list_resources() -> ToolEffect:
+    """Handle list_resources tool."""
+    entries = _RESOURCE_ENTRIES
+    if not entries:
+        return _make_text("No resources available.")
+
+    lines = [f"Available resources ({len(entries)}):"]
+    for entry in entries:
+        lines.append(f"\n{entry.uri} -- {entry.title}")
+        lines.append(f"  {entry.description}")
+    return _make_text("\n".join(lines))
+
+
+def _call_read_resource(arguments: dict[str, object]) -> ToolEffect:
+    """Handle read_resource tool."""
+    uri = arguments.get("uri")
+    if not isinstance(uri, str):
+        return _make_error("Missing or invalid 'uri' parameter (must be a string)")
+
+    entry = _read_resource_entry(uri)
+    if entry is not None:
+        return _make_text(entry.content)
+
+    available = ", ".join(e.uri for e in _RESOURCE_ENTRIES)
+    return _make_error(f"Resource not found: {uri}. Available URIs: {available}")
 
 
 def _call_schema(arguments: dict[str, object], registry: GroupRegistry) -> ToolEffect:

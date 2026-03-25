@@ -155,7 +155,7 @@ class TestFullMCPFlow:
         data = await resp.json()
         assert "result" in data
         tools = data["result"]["tools"]
-        assert len(tools) == 4
+        assert len(tools) == 6
 
         # tools/call - search for services
         resp = await http_client.post(

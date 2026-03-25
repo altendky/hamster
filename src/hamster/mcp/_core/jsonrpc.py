@@ -13,6 +13,8 @@ from .types import (
     Content,
     ImageContent,
     JsonRpcId,
+    Resource,
+    ResourceContents,
     ServerCapabilities,
     ServerInfo,
     TextContent,
@@ -253,15 +255,25 @@ def serialize_capabilities(capabilities: ServerCapabilities) -> dict[str, object
 
     tools=ToolsCapability() -> {"tools": {}}
     tools=ToolsCapability(list_changed=True) -> {"tools": {"listChanged": true}}
-    tools=None -> {}
+    tools=None -> (tools key omitted)
+    resources=ResourcesCapability() -> {"resources": {}}
+    resources=None -> (resources key omitted)
     """
-    if capabilities.tools is None:
-        return {}
+    result: dict[str, object] = {}
 
-    tools_obj: dict[str, object] = {}
-    if capabilities.tools.list_changed:
-        tools_obj["listChanged"] = True
-    return {"tools": tools_obj}
+    if capabilities.tools is not None:
+        tools_obj: dict[str, object] = {}
+        if capabilities.tools.list_changed:
+            tools_obj["listChanged"] = True
+        result["tools"] = tools_obj
+
+    if capabilities.resources is not None:
+        resources_obj: dict[str, object] = {}
+        if capabilities.resources.list_changed:
+            resources_obj["listChanged"] = True
+        result["resources"] = resources_obj
+
+    return result
 
 
 # --- MCP Response Builders ---
@@ -305,3 +317,55 @@ def build_tool_result_response(
 ) -> dict[str, object]:
     """Build tool result response."""
     return make_success_response(request_id, serialize_call_tool_result(result))
+
+
+# --- MCP Resource Serialization ---
+
+
+def serialize_resource(resource: Resource) -> dict[str, object]:
+    """Serialize Resource to wire format."""
+    result: dict[str, object] = {
+        "uri": resource.uri,
+        "name": resource.name,
+    }
+    if resource.description is not None:
+        result["description"] = resource.description
+    if resource.mime_type is not None:
+        result["mimeType"] = resource.mime_type
+    return result
+
+
+def serialize_resource_contents(contents: ResourceContents) -> dict[str, object]:
+    """Serialize ResourceContents to wire format."""
+    result: dict[str, object] = {
+        "uri": contents.uri,
+        "text": contents.text,
+    }
+    if contents.mime_type is not None:
+        result["mimeType"] = contents.mime_type
+    return result
+
+
+def build_resource_list_response(
+    request_id: JsonRpcId,
+    resource_list: Sequence[Resource],
+) -> dict[str, object]:
+    """Build resources/list response.
+
+    No pagination --- all resources in one response.
+    """
+    return make_success_response(
+        request_id,
+        {"resources": [serialize_resource(r) for r in resource_list]},
+    )
+
+
+def build_resource_read_response(
+    request_id: JsonRpcId,
+    contents: Sequence[ResourceContents],
+) -> dict[str, object]:
+    """Build resources/read response."""
+    return make_success_response(
+        request_id,
+        {"contents": [serialize_resource_contents(c) for c in contents]},
+    )

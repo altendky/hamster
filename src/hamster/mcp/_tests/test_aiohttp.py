@@ -247,9 +247,11 @@ class TestCompleteFlow:
         data = await resp.json()
         assert "result" in data
         tools = data["result"]["tools"]
-        assert len(tools) == 4
+        assert len(tools) == 6
         tool_names = {t["name"] for t in tools}
         assert "call" in tool_names
+        assert "list_resources" in tool_names
+        assert "read_resource" in tool_names
 
         # tools/call - search (no I/O)
         resp = await client.post(

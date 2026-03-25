@@ -77,15 +77,48 @@ class ToolsCapability:
 
 
 @dataclass(frozen=True, slots=True)
+class ResourcesCapability:
+    """Resources capability declaration.
+
+    list_changed=False means "we support resources, no listChanged".
+    list_changed=True advertises listChanged notifications.
+    """
+
+    list_changed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class ServerCapabilities:
     """MCP server capabilities.
 
     tools=ToolsCapability() means "we support tools, no listChanged".
     tools=ToolsCapability(list_changed=True) advertises listChanged.
     tools=None means "tools not supported".
+    resources=ResourcesCapability() means "we support resources".
+    resources=None means "resources not supported".
     """
 
     tools: ToolsCapability | None = field(default_factory=ToolsCapability)
+    resources: ResourcesCapability | None = field(default_factory=ResourcesCapability)
+
+
+@dataclass(frozen=True, slots=True)
+class Resource:
+    """MCP resource metadata for resources/list responses."""
+
+    uri: str
+    name: str
+    description: str | None = None
+    mime_type: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceContents:
+    """MCP resource content for resources/read responses."""
+
+    uri: str
+    text: str
+    mime_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

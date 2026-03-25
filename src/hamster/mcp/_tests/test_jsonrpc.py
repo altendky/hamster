@@ -351,19 +351,36 @@ class TestSerializeCapabilities:
     """Tests for serialize_capabilities."""
 
     def test_tools_default(self) -> None:
-        cap = ServerCapabilities(tools=ToolsCapability())
+        cap = ServerCapabilities(tools=ToolsCapability(), resources=None)
         result = serialize_capabilities(cap)
         assert result == {"tools": {}}
 
     def test_tools_list_changed_true(self) -> None:
-        cap = ServerCapabilities(tools=ToolsCapability(list_changed=True))
+        cap = ServerCapabilities(
+            tools=ToolsCapability(list_changed=True), resources=None
+        )
         result = serialize_capabilities(cap)
         assert result == {"tools": {"listChanged": True}}
 
     def test_tools_none(self) -> None:
-        cap = ServerCapabilities(tools=None)
+        cap = ServerCapabilities(tools=None, resources=None)
         result = serialize_capabilities(cap)
         assert result == {}
+
+    def test_resources_default(self) -> None:
+        from hamster.mcp._core.types import ResourcesCapability
+
+        cap = ServerCapabilities(
+            tools=ToolsCapability(), resources=ResourcesCapability()
+        )
+        result = serialize_capabilities(cap)
+        assert result == {"tools": {}, "resources": {}}
+
+    def test_resources_none(self) -> None:
+        cap = ServerCapabilities(tools=ToolsCapability(), resources=None)
+        result = serialize_capabilities(cap)
+        assert result == {"tools": {}}
+        assert "resources" not in result
 
 
 class TestSerializeServerInfo:
@@ -380,7 +397,7 @@ class TestBuildInitializeResponse:
 
     def test_complete_response(self) -> None:
         info = ServerInfo(name="test", version="0.1")
-        cap = ServerCapabilities(tools=ToolsCapability())
+        cap = ServerCapabilities(tools=ToolsCapability(), resources=None)
         result = build_initialize_response(1, info, cap, "2025-03-26")
         assert result["jsonrpc"] == "2.0"
         assert result["id"] == 1
