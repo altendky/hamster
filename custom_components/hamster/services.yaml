@@ -1,0 +1,17 @@
+refresh_docs:
+  name: Refresh WebSocket docs
+  description: >-
+    Fetch WebSocket command documentation from the Home Assistant developer
+    docs repository on GitHub and enrich the hass group commands with
+    descriptions. Uses the git ref configured in integration options by
+    default, or accepts an override.
+  fields:
+    git_ref:
+      name: Git ref
+      description: >-
+        Branch, tag, or commit hash to fetch documentation from. Defaults to
+        the value configured in the integration options (typically "master").
+      required: false
+      example: "master"
+      selector:
+        text:

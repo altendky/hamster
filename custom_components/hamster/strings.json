@@ -9,5 +9,38 @@
     "abort": {
       "single_instance_allowed": "Only a single instance of Hamster MCP is allowed."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "auto_fetch_docs": "Auto-fetch docs on startup",
+          "docs_git_ref": "Git ref for docs"
+        },
+        "data_description": {
+          "auto_fetch_docs": "Automatically fetch WebSocket command documentation from GitHub when the integration loads.",
+          "docs_git_ref": "Branch, tag, or commit hash to fetch documentation from (e.g. \"master\")."
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "refresh_websocket_docs": {
+        "name": "Refresh WebSocket docs"
+      }
+    }
+  },
+  "services": {
+    "refresh_docs": {
+      "name": "Refresh WebSocket docs",
+      "description": "Fetch WebSocket command documentation from the Home Assistant developer docs repository on GitHub and enrich the hass group commands with descriptions.",
+      "fields": {
+        "git_ref": {
+          "name": "Git ref",
+          "description": "Branch, tag, or commit hash to fetch documentation from. Defaults to the value configured in the integration options."
+        }
+      }
+    }
   }
 }
