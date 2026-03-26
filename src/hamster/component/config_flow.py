@@ -73,11 +73,11 @@ class HamsterOptionsFlow(OptionsFlowWithConfigEntry):
                         default=current.get(
                             "docs_url_template", DEFAULT_DOCS_URL_TEMPLATE
                         ),
-                    ): str,
+                    ): vol.All(str, vol.Length(min=1)),
                     vol.Optional(
                         "docs_git_ref",
                         default=current.get("docs_git_ref", DEFAULT_DOCS_GIT_REF),
-                    ): str,
+                    ): vol.All(str, vol.Length(min=1)),
                 }
             ),
         )
