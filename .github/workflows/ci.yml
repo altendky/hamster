@@ -22,7 +22,7 @@ jobs:
 
   checks:
     name: All checks
-    if: always()
+    if: ${{ !cancelled() }}
     needs: [pre-commit, python, validate]
     runs-on: ubuntu-latest
     steps:
