@@ -22,8 +22,10 @@ if TYPE_CHECKING:
         MockConfigEntry,
     )
 
-# Enable sockets for HTTP tests
-pytestmark = pytest.mark.enable_socket
+# Enable sockets for HTTP tests.  Use the fixture (not the bare marker) to
+# avoid non-deterministic hook-ordering between pytest-socket and
+# pytest-homeassistant-custom-component.  See test_aiohttp.py docstring.
+pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 
 @pytest.fixture(autouse=True)

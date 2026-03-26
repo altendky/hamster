@@ -6,8 +6,13 @@ responses) is already covered by Stage 5's pure tests. These tests focus on what
 the transport adds: I/O integration and effect dispatch.
 
 These tests require socket access (disabled by pytest-socket when
-pytest-homeassistant-custom-component is installed). Mark module with
-enable_socket to allow socket usage.
+pytest-homeassistant-custom-component is installed).  Use the ``socket_enabled``
+fixture rather than the bare ``enable_socket`` marker so that sockets are
+re-enabled during fixture setup -- after *all* ``pytest_runtest_setup`` hooks
+have run.  This avoids a non-deterministic hook-ordering race between
+pytest-socket and pytest-homeassistant-custom-component (both are entry-point
+plugins whose registration order depends on filesystem iteration of
+site-packages).
 """
 
 from __future__ import annotations
@@ -32,8 +37,8 @@ from hamster.mcp._core.types import (
 )
 from hamster.mcp._io.aiohttp import AiohttpMCPTransport, EffectHandler
 
-# Re-enable sockets for this module (disabled by pytest-homeassistant-custom-component)
-pytestmark = pytest.mark.enable_socket
+# Re-enable sockets for this module (disabled by pytest-homeassistant-custom-component).
+pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
