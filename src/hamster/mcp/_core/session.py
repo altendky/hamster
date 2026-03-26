@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from .events import ReceiveResult, RunEffects, SendResponse, SessionExpired, ToolEffect
 from .groups import GroupRegistry, ServicesGroup
+from .hass_group import HassGroup
 from .jsonrpc import (
     INVALID_PARAMS,
     INVALID_REQUEST,
@@ -428,6 +429,21 @@ class SessionManager:
         """
         self._registry.update_group(services_group)
         self._services_changed_at = None  # Clear pending regeneration
+
+    def update_hass_group(self, hass_group: HassGroup) -> None:
+        """Update just the hass group within the existing registry.
+
+        Used by docs enrichment to swap in a group with populated
+        descriptions.
+        """
+        self._registry.update_group(hass_group)
+
+    def get_hass_group(self) -> HassGroup | None:
+        """Return the hass group from the registry, or None if not found."""
+        group = self._registry.get("hass")
+        if isinstance(group, HassGroup):
+            return group
+        return None
 
     def notify_services_changed(self, now: float) -> None:
         """Record that services changed; starts debounce timer."""

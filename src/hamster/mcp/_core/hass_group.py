@@ -294,6 +294,15 @@ class HassGroup:
             self._entries.append((command_type, search_text, info))
 
     @property
+    def commands(self) -> dict[str, CommandInfo]:
+        """Copy of the commands dict.
+
+        Used by the docs enrichment layer to read current commands
+        before merging in descriptions.
+        """
+        return dict(self._commands)
+
+    @property
     def name(self) -> str:
         """Group name."""
         return "hass"

@@ -12,12 +12,17 @@ import importlib.metadata
 import logging
 import os
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+import aiohttp
 from homeassistant.const import EVENT_SERVICE_REGISTERED, EVENT_SERVICE_REMOVED
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.helpers.service import async_get_all_descriptions
+from homeassistant.helpers.storage import Store
+import voluptuous as vol
 
+from hamster.mcp._core.docs_enrichment import enrich_commands, parse_websocket_docs
 from hamster.mcp._core.groups import GroupRegistry, ServicesGroup
 from hamster.mcp._core.hass_group import HassGroup, discover_commands
 from hamster.mcp._core.session import SessionManager
@@ -26,7 +31,15 @@ from hamster.mcp._core.types import ServerInfo
 from hamster.mcp._io.aiohttp import AiohttpMCPTransport
 from hamster.mcp._io.resources import load_all_resources
 
-from .const import DEFAULT_ENABLE_SERVICES_GROUP, DEFAULT_IDLE_TIMEOUT, DOMAIN
+from .const import (
+    DEFAULT_AUTO_FETCH_DOCS,
+    DEFAULT_DOCS_GIT_REF,
+    DEFAULT_DOCS_URL_TEMPLATE,
+    DEFAULT_ENABLE_SERVICES_GROUP,
+    DEFAULT_IDLE_TIMEOUT,
+    DOMAIN,
+    PLATFORMS,
+)
 from .http import HamsterEffectHandler, HamsterMCPView
 
 if TYPE_CHECKING:
@@ -48,6 +61,17 @@ except importlib.metadata.PackageNotFoundError:
 _MAX_RETRIES = 4
 # Retry delays in seconds (exponential backoff capped at 15s)
 _RETRY_DELAYS = [1.0, 2.0, 4.0, 8.0, 15.0]
+
+# Storage version and key for docs cache
+_DOCS_STORE_VERSION = 1
+_DOCS_STORE_KEY = "hamster_docs_cache"
+
+# Service schema for refresh_docs
+_REFRESH_DOCS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("git_ref"): str,
+    }
+)
 
 
 def is_supervisor_available(hass: HomeAssistant) -> bool:
@@ -195,6 +219,93 @@ async def _build_partial_registry(
     return registry
 
 
+async def _refresh_websocket_docs(
+    hass: HomeAssistant,
+    manager: SessionManager,
+    store: Store[dict[str, Any]],
+    *,
+    url_template: str,
+    git_ref: str,
+) -> dict[str, int]:
+    """Fetch WebSocket docs, parse, enrich, and update registry.
+
+    Args:
+        hass: Home Assistant instance
+        manager: Session manager holding the group registry
+        store: Persistent store for caching parsed descriptions
+        url_template: URL template with optional ``{ref}`` placeholder
+        git_ref: Git ref (branch, tag, commit) substituted into the template
+
+    Returns:
+        Dict with ``commands_enriched`` and ``commands_total`` counts
+
+    Raises:
+        Exception: If the fetch or any step fails
+    """
+    # 1. Fetch raw markdown
+    session = async_get_clientsession(hass)
+    url = url_template.format(ref=git_ref)
+    async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        resp.raise_for_status()
+        markdown = await resp.text()
+
+    # 2. Parse (core, pure)
+    descriptions = parse_websocket_docs(markdown)
+
+    # 3. Get current commands from existing HassGroup
+    hass_group = manager.get_hass_group()
+    if hass_group is None:
+        msg = "Hass group not found in registry"
+        raise RuntimeError(msg)
+
+    current_commands = hass_group.commands
+
+    # 4. Enrich (core, pure)
+    enriched = enrich_commands(current_commands, descriptions)
+
+    # 5. Update registry
+    manager.update_hass_group(HassGroup(enriched))
+
+    # 6. Persist parsed descriptions for next startup
+    await store.async_save(
+        {
+            "descriptions": descriptions,
+            "url_template": url_template,
+            "git_ref": git_ref,
+        }
+    )
+
+    commands_enriched = sum(1 for c in enriched.values() if c.description is not None)
+    commands_total = len(enriched)
+
+    return {
+        "commands_enriched": commands_enriched,
+        "commands_total": commands_total,
+    }
+
+
+def _apply_cached_descriptions(
+    manager: SessionManager,
+    cached_descriptions: dict[str, str],
+) -> None:
+    """Apply cached descriptions to the current hass group.
+
+    Called at startup to restore enrichment from the persistent store
+    without requiring a network fetch.
+
+    Args:
+        manager: Session manager holding the group registry
+        cached_descriptions: Previously parsed descriptions from the store
+    """
+    hass_group = manager.get_hass_group()
+    if hass_group is None:
+        return
+
+    current_commands = hass_group.commands
+    enriched = enrich_commands(current_commands, cached_descriptions)
+    manager.update_hass_group(HassGroup(enriched))
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Hamster MCP from a config entry.
 
@@ -209,6 +320,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     enable_services_group = entry.options.get(
         "enable_services_group", DEFAULT_ENABLE_SERVICES_GROUP
     )
+    auto_fetch_docs = entry.options.get("auto_fetch_docs", DEFAULT_AUTO_FETCH_DOCS)
+    docs_url_template = entry.options.get(
+        "docs_url_template", DEFAULT_DOCS_URL_TEMPLATE
+    )
+    docs_git_ref = entry.options.get("docs_git_ref", DEFAULT_DOCS_GIT_REF)
 
     # Create components
     server_info = ServerInfo(name="hamster", version=_HAMSTER_VERSION)
@@ -246,6 +362,59 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass, enable_services_group=enable_services_group
     )
     manager.update_registry(registry)
+
+    # --- Docs enrichment ---
+    docs_store: Store[dict[str, Any]] = Store(
+        hass, _DOCS_STORE_VERSION, _DOCS_STORE_KEY
+    )
+
+    # Apply cached descriptions immediately (no network needed)
+    cached = await docs_store.async_load()
+    if cached is not None and isinstance(cached.get("descriptions"), dict):
+        try:
+            _apply_cached_descriptions(manager, cached["descriptions"])
+            _LOGGER.debug(
+                "Applied cached WebSocket docs (ref=%s)",
+                cached.get("git_ref", "unknown"),
+            )
+        except Exception:
+            _LOGGER.warning("Failed to apply cached WebSocket docs")
+
+    # Create the refresh function closure used by both service and button
+    async def _do_refresh_docs(
+        *,
+        git_ref: str = docs_git_ref,
+    ) -> dict[str, int]:
+        return await _refresh_websocket_docs(
+            hass,
+            manager,
+            docs_store,
+            url_template=docs_url_template,
+            git_ref=git_ref,
+        )
+
+    # Register the hamster.refresh_docs service
+    async def _handle_refresh_docs(call: Any) -> None:
+        """Handle the refresh_docs service call."""
+        ref = call.data.get("git_ref", docs_git_ref)
+        try:
+            result = await _do_refresh_docs(git_ref=ref)
+            _LOGGER.info(
+                "WebSocket docs refreshed via service: "
+                "%d/%d commands enriched (ref=%s)",
+                result["commands_enriched"],
+                result["commands_total"],
+                ref,
+            )
+        except Exception:
+            _LOGGER.exception("Failed to refresh WebSocket docs via service")
+
+    hass.services.async_register(
+        DOMAIN,
+        "refresh_docs",
+        _handle_refresh_docs,
+        schema=_REFRESH_DOCS_SCHEMA,
+    )
 
     # Create services group rebuild callback for the transport
     # Only services group needs rebuilding on service events;
@@ -303,9 +472,45 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "manager": manager,
         "transport": transport,
         "wakeup_task": wakeup_task,
+        "refresh_docs": _do_refresh_docs,
     }
 
+    # Set up entity platforms (button)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Auto-fetch docs in background if enabled
+    if auto_fetch_docs:
+
+        async def _auto_fetch_docs() -> None:
+            """Fetch docs from GitHub in the background."""
+            try:
+                result = await _do_refresh_docs(git_ref=docs_git_ref)
+                _LOGGER.info(
+                    "Auto-fetched WebSocket docs: %d/%d commands enriched (ref=%s)",
+                    result["commands_enriched"],
+                    result["commands_total"],
+                    docs_git_ref,
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "Auto-fetch of WebSocket docs failed (will use cached if available)"
+                )
+
+        entry.async_create_background_task(
+            hass,
+            _auto_fetch_docs(),
+            "hamster_auto_fetch_docs",
+        )
+
+    # Reload integration when options change so captured values are refreshed
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the integration when options are updated."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -318,6 +523,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     Returns:
         True if unload was successful
     """
+    # Unload entity platforms
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
+
+    # Remove service
+    hass.services.async_remove(DOMAIN, "refresh_docs")
+
     data = hass.data[DOMAIN].pop(entry.entry_id, None)
     if data is None:
         return True

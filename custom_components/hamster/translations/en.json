@@ -9,5 +9,40 @@
     "abort": {
       "single_instance_allowed": "Only a single instance of Hamster MCP is allowed."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "auto_fetch_docs": "Auto-fetch docs on startup",
+          "docs_url_template": "Docs URL template",
+          "docs_git_ref": "Git ref for docs"
+        },
+        "data_description": {
+          "auto_fetch_docs": "Automatically fetch WebSocket command documentation when the integration loads.",
+          "docs_url_template": "URL template for fetching the WebSocket API docs markdown. Use {ref} as a placeholder for the git ref. Works with GitHub, GitLab, Gitea, or any raw file URL.",
+          "docs_git_ref": "Branch, tag, or commit hash substituted into the URL template (e.g. \"master\")."
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "refresh_websocket_docs": {
+        "name": "Refresh WebSocket docs"
+      }
+    }
+  },
+  "services": {
+    "refresh_docs": {
+      "name": "Refresh WebSocket docs",
+      "description": "Fetch WebSocket command documentation and enrich the hass group commands with descriptions. Uses the URL template and git ref from integration options by default.",
+      "fields": {
+        "git_ref": {
+          "name": "Git ref",
+          "description": "Branch, tag, or commit hash to fetch documentation from. Defaults to the value configured in the integration options."
+        }
+      }
+    }
   }
 }
