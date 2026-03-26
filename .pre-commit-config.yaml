@@ -30,6 +30,12 @@ repos:
     hooks:
       - id: shellcheck
 
+  - repo: https://github.com/Mergifyio/mergify-pre-commit
+    rev: 1.1.0
+    hooks:
+      - id: validate-mergify-config
+      - id: validate-mergify-config-location
+
   - repo: local
     hooks:
       - id: ruff-format
