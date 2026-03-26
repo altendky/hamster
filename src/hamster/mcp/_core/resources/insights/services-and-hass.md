@@ -106,4 +106,4 @@ in a single bulk response rather than individual searchable entries.
 | Searchable by keyword       | Yes                       | No                        |
 | Target specifications       | Yes (domain, integration) | No                        |
 | Field descriptions          | Yes                       | Via `hass/get_services`   |
-| Can call any service        | Yes                       | Yes                       |
+| Can call any service        | Yes (indexed services)    | Yes                       |
