@@ -8,6 +8,7 @@ from __future__ import annotations
 from hamster.mcp._core.docs_enrichment import (
     _extract_command_types,
     _split_h2_sections,
+    _split_h3_subsections,
     _type_from_json,
     _type_from_regex,
     enrich_commands,
@@ -60,6 +61,56 @@ class TestSplitH2Sections:
         result = _split_h2_sections(md)
         assert len(result) == 1
         assert result[0][0] == "First"
+
+
+# ---------------------------------------------------------------------------
+# _split_h3_subsections
+# ---------------------------------------------------------------------------
+
+
+class TestSplitH3Subsections:
+    """Tests for _split_h3_subsections."""
+
+    def test_empty(self) -> None:
+        preamble, subs = _split_h3_subsections("")
+        assert preamble == ""
+        assert subs == []
+
+    def test_no_subsections(self) -> None:
+        body = "Just some text.\n\nMore text."
+        preamble, subs = _split_h3_subsections(body)
+        assert preamble == body
+        assert subs == []
+
+    def test_preamble_and_subsections(self) -> None:
+        body = (
+            "Intro text.\n\n"
+            "### Sub One\n\nSub one body.\n\n"
+            "### Sub Two\n\nSub two body.\n"
+        )
+        preamble, subs = _split_h3_subsections(body)
+        assert preamble == "Intro text."
+        assert len(subs) == 2
+        assert subs[0][0] == "Sub One"
+        assert "Sub one body" in subs[0][1]
+        assert subs[1][0] == "Sub Two"
+        assert "Sub two body" in subs[1][1]
+
+    def test_no_preamble(self) -> None:
+        body = "### First\n\nFirst body.\n\n### Second\n\nSecond body.\n"
+        preamble, subs = _split_h3_subsections(body)
+        assert preamble == ""
+        assert len(subs) == 2
+        assert subs[0][0] == "First"
+        assert "First body" in subs[0][1]
+
+    def test_single_subsection(self) -> None:
+        body = "Preamble.\n\n### Only sub\n\nSub body.\n"
+        preamble, subs = _split_h3_subsections(body)
+        assert preamble == "Preamble."
+        assert len(subs) == 1
+        assert subs[0][0] == "Only sub"
+        assert "Sub body" in subs[0][1]
 
 
 # ---------------------------------------------------------------------------
@@ -229,10 +280,18 @@ class TestParseWebsocketDocs:
             '  "type": "homeassistant/expose_entity"\n}\n```\n'
         )
         result = parse_websocket_docs(md)
-        # Both commands extracted from the single ## section, sharing
-        # the same full-section description
+        # Each command gets its subsection-specific description
         assert "homeassistant/expose_entity/list" in result
         assert "homeassistant/expose_entity" in result
+
+        list_desc = result["homeassistant/expose_entity/list"]
+        expose_desc = result["homeassistant/expose_entity"]
+
+        assert "Returns the exposure status" in list_desc
+        assert "Expose or unexpose" not in list_desc
+
+        assert "Expose or unexpose" in expose_desc
+        assert "Returns the exposure status" not in expose_desc
 
     def test_first_type_wins_for_duplicate(self) -> None:
         md = (
@@ -255,6 +314,53 @@ class TestParseWebsocketDocs:
 
     def test_empty_input(self) -> None:
         assert parse_websocket_docs("") == {}
+
+    def test_preamble_command_in_multi_subsection_section(self) -> None:
+        md = (
+            "## Subscribe to trigger\n\n"
+            "You can subscribe to triggers.\n\n"
+            '```json\n{\n  "id": 2,\n  "type": "subscribe_trigger"\n}\n```\n\n'
+            "### Unsubscribing from events\n\n"
+            "To unsubscribe:\n\n"
+            '```json\n{\n  "id": 3,\n  "type": "unsubscribe_events"\n}\n```\n'
+        )
+        result = parse_websocket_docs(md)
+        assert "subscribe_trigger" in result
+        assert "unsubscribe_events" in result
+
+        sub_desc = result["subscribe_trigger"]
+        unsub_desc = result["unsubscribe_events"]
+
+        assert "subscribe to triggers" in sub_desc
+        assert "unsubscribe" not in sub_desc.lower()
+
+        assert "To unsubscribe" in unsub_desc
+        assert "subscribe to triggers" not in unsub_desc
+
+    def test_section_without_subsections_unchanged(self) -> None:
+        md = (
+            "## Fetching states\n\n"
+            "This will get a dump of all states.\n\n"
+            '```json\n{\n  "id": 19,\n  "type": "get_states"\n}\n```\n'
+        )
+        result = parse_websocket_docs(md)
+        assert "get_states" in result
+        assert "dump of all states" in result["get_states"]
+
+    def test_subsection_with_no_commands_skipped(self) -> None:
+        md = (
+            "## Topic\n\n"
+            "Intro.\n\n"
+            "### Background\n\n"
+            "Just prose, no code blocks.\n\n"
+            "### The command\n\n"
+            "Do the thing.\n\n"
+            '```json\n{\n  "id": 1,\n  "type": "do_thing"\n}\n```\n'
+        )
+        result = parse_websocket_docs(md)
+        assert "do_thing" in result
+        assert "Do the thing" in result["do_thing"]
+        assert "Just prose" not in result["do_thing"]
 
 
 # ---------------------------------------------------------------------------

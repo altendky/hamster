@@ -33,6 +33,7 @@ _EXCLUDED_TYPES: frozenset[str] = frozenset(
 _CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n```", re.DOTALL)
 _COMMENT_RE = re.compile(r"//[^\n]*")
 _H2_RE = re.compile(r"^## (.+)$", re.MULTILINE)
+_H3_RE = re.compile(r"^### (.+)$", re.MULTILINE)
 
 
 def parse_websocket_docs(markdown: str) -> dict[str, str]:
@@ -53,14 +54,31 @@ def parse_websocket_docs(markdown: str) -> dict[str, str]:
 
     sections = _split_h2_sections(markdown)
     for _heading, body in sections:
-        command_types = _extract_command_types(body)
-        description = body.strip()
-        if not description:
-            continue
+        preamble, subsections = _split_h3_subsections(body)
 
-        for cmd_type in command_types:
-            if cmd_type not in _EXCLUDED_TYPES and cmd_type not in result:
-                result[cmd_type] = description
+        if not subsections:
+            # No ### subsections — whole body is the description.
+            description = body.strip()
+            if not description:
+                continue
+            for cmd_type in _extract_command_types(body):
+                if cmd_type not in _EXCLUDED_TYPES and cmd_type not in result:
+                    result[cmd_type] = description
+        else:
+            # Assign preamble commands the preamble text.
+            if preamble:
+                for cmd_type in _extract_command_types(preamble):
+                    if cmd_type not in _EXCLUDED_TYPES and cmd_type not in result:
+                        result[cmd_type] = preamble
+
+            # Assign subsection commands their subsection text.
+            for _sub_heading, sub_body in subsections:
+                sub_desc = sub_body.strip()
+                if not sub_desc:
+                    continue
+                for cmd_type in _extract_command_types(sub_body):
+                    if cmd_type not in _EXCLUDED_TYPES and cmd_type not in result:
+                        result[cmd_type] = sub_desc
 
     return result
 
@@ -119,6 +137,37 @@ def _split_h2_sections(markdown: str) -> list[tuple[str, str]]:
         sections.append((heading, body))
 
     return sections
+
+
+def _split_h3_subsections(body: str) -> tuple[str, list[tuple[str, str]]]:
+    """Split an H2 section body into preamble and ``### `` subsections.
+
+    Args:
+        body: The body text of a ``## `` section (as returned by
+            :func:`_split_h2_sections`).
+
+    Returns:
+        A tuple of ``(preamble, subsections)`` where *preamble* is the text
+        before the first ``### `` heading (may be empty) and *subsections*
+        is a list of ``(heading, body)`` pairs for each ``### `` heading.
+        If there are no ``### `` headings, *subsections* is empty and
+        *preamble* contains the full body text.
+    """
+    matches = list(_H3_RE.finditer(body))
+    if not matches:
+        return body, []
+
+    preamble = body[: matches[0].start()].strip()
+    subsections: list[tuple[str, str]] = []
+
+    for i, match in enumerate(matches):
+        heading = match.group(1).strip()
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        sub_body = body[start:end].strip()
+        subsections.append((heading, sub_body))
+
+    return preamble, subsections
 
 
 def _extract_command_types(text: str) -> list[str]:
