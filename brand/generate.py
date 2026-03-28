@@ -11,20 +11,25 @@ Layer requirements:
     - "whiskers": Whisker lines — gets amber halo only
     - "nose": Nose curve — gets pink fill (forms closed region when mirrored)
     - "mouth": Mouth curves — gets pink fill (forms closed region when mirrored)
-    - "eyes": Eye ellipse — gets white fill + black stroke
+    - "eyes": Eye ellipse — gets black fill + black stroke
+    - "eye highlights": Highlight shapes — passthrough (mirrored, preserved orientation)
 
 Requirements:
-    - Inkscape CLI (`inkscape` in PATH)
+    - Inkscape CLI 1.4.3 (`inkscape` in PATH) — tested version
     - cairosvg, Pillow (Python packages)
 
 Usage:
     python brand/generate.py
     # or via mise:
     mise run generate-icons
+
+    # To run with a different Inkscape version (output may differ):
+    python brand/generate.py --override-version-check
 """
 
 from __future__ import annotations
 
+import argparse
 import copy
 from pathlib import Path
 import re
@@ -56,6 +61,7 @@ MIRROR_TRANSFORM = "matrix(-1,0,0,1,256,0)"
 # "fill" can be False or a color string
 # "clip_to" specifies a layer whose fill path is used as a clip mask
 # "mirror" defaults to True; set to False for layers already covering full canvas
+# "passthrough" means render as-is (just mirror if needed), no fill/stroke processing
 LAYER_CONFIG = {
     "boundary": {"halo": True, "fill": AMBER},
     "spots": {
@@ -68,7 +74,16 @@ LAYER_CONFIG = {
     "whiskers": {"halo": True, "fill": False},
     "nose": {"halo": False, "fill": PINK},
     "mouth": {"halo": False, "fill": PINK},
-    "eyes": {"halo": False, "fill": WHITE},
+    "eyes": {"halo": False, "fill": BLACK},
+    "eye highlights": {
+        "halo": False,
+        "fill": False,
+        "passthrough": True,
+        # Mirror to other eye but keep same orientation (double mirror)
+        # Disabled for now - highlights done manually in source SVG
+        "mirror_preserve_orientation": False,
+        "mirror": False,  # Don't mirror at all - source has both eyes' highlights
+    },
 }
 
 # Paths
@@ -82,14 +97,89 @@ INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
 SODIPODI_NS = "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
 
 
-def check_inkscape() -> None:
-    """Verify Inkscape CLI is available."""
+# Tested Inkscape version - script behavior verified with this exact version
+# Other versions may produce different output due to Inkscape action API changes
+TESTED_INKSCAPE_VERSION = (1, 4, 3)
+
+
+def get_inkscape_version() -> tuple[int, int, int] | None:
+    """Get the installed Inkscape version as a tuple (major, minor, patch).
+
+    Returns:
+        Version tuple, or None if version cannot be determined.
+    """
+    try:
+        result = subprocess.run(
+            ["inkscape", "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        # Output format: "Inkscape 1.4.3 (1:1.4.3+202512261034+0d15f75042)"
+        match = re.search(r"Inkscape\s+(\d+)\.(\d+)(?:\.(\d+))?", result.stdout)
+        if match:
+            major = int(match.group(1))
+            minor = int(match.group(2))
+            patch = int(match.group(3)) if match.group(3) else 0
+            return (major, minor, patch)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return None
+
+
+def check_inkscape(*, override_version_check: bool = False) -> str:
+    """Verify Inkscape CLI is available and matches tested version.
+
+    This script was tested with a specific Inkscape version. Running with a
+    different version may produce different output due to changes in the
+    Inkscape action API (e.g., path-union behavior).
+
+    Args:
+        override_version_check: If True, allow running with untested versions.
+
+    Returns:
+        Version string for display.
+
+    Raises:
+        RuntimeError: If Inkscape is not found or version doesn't match.
+    """
     if shutil.which("inkscape") is None:
         msg = (
             "Inkscape CLI not found in PATH. "
             "Install Inkscape and ensure 'inkscape' is accessible."
         )
         raise RuntimeError(msg)
+
+    version = get_inkscape_version()
+    if version is None:
+        if override_version_check:
+            return "unknown (override enabled)"
+        msg = (
+            "Could not determine Inkscape version. "
+            "Use --override-version-check to bypass this check."
+        )
+        raise RuntimeError(msg)
+
+    version_str = f"{version[0]}.{version[1]}.{version[2]}"
+    tested_str = (
+        f"{TESTED_INKSCAPE_VERSION[0]}."
+        f"{TESTED_INKSCAPE_VERSION[1]}."
+        f"{TESTED_INKSCAPE_VERSION[2]}"
+    )
+
+    if version != TESTED_INKSCAPE_VERSION:
+        if override_version_check:
+            return f"{version_str} (override enabled, tested with {tested_str})"
+        msg = (
+            f"Inkscape {version_str} found, but this script was tested with "
+            f"{tested_str}. Different versions may produce different output due "
+            f"to changes in the Inkscape action API (e.g., path-union behavior "
+            f"differs between 1.1.x and 1.4.x). "
+            f"Use --override-version-check to run anyway."
+        )
+        raise RuntimeError(msg)
+
+    return version_str
 
 
 def parse_style_attribute(style: str) -> dict[str, str]:
@@ -349,13 +439,20 @@ def extract_outer_paths(path_d: str, count: int = 1) -> str:
     return path_d
 
 
-def create_fill_shape_for_layer(layer: ET.Element, outer_count: int | None = 1) -> str:
+def create_fill_shape_for_layer(
+    layer: ET.Element,
+    outer_count: int | None = 1,
+    *,
+    use_union: bool = True,
+) -> str:
     """Use Inkscape to create a fill shape from a layer's strokes.
 
     Args:
         layer: The layer element containing stroke paths.
         outer_count: Number of outer contours to extract. Use None to keep all.
             When mirroring creates two separate shapes (like eyes), use 2.
+        use_union: If True, union all paths together. If False, keep separate
+            and extract outer contour from each path individually.
 
     Returns:
         The 'd' attribute of the resulting filled path.
@@ -368,42 +465,74 @@ def create_fill_shape_for_layer(layer: ET.Element, outer_count: int | None = 1) 
         output_path = Path(tmp.name)
 
     try:
-        # Run Inkscape to convert strokes to paths and union
-        subprocess.run(
-            [
-                "inkscape",
-                str(temp_svg),
-                "--actions="
+        # Build Inkscape actions
+        if use_union:
+            # Use path-union action instead of verb:SelectionUnion for better
+            # compatibility across Inkscape versions
+            actions = (
                 "select-all;"
                 "object-stroke-to-path;"
                 "select-all;"
-                "verb:SelectionUnion;"
+                "path-union;"
                 f"export-filename:{output_path};"
                 "export-plain-svg;"
-                "export-do",
-            ],
+                "export-do"
+            )
+        else:
+            # No union - stroke-to-path and ungroup to flatten transforms
+            actions = (
+                "select-all;"
+                "object-stroke-to-path;"
+                "select-all;"
+                "verb:SelectionUnGroup;"
+                "select-all;"
+                "verb:SelectionUnGroup;"
+                f"export-filename:{output_path};"
+                "export-plain-svg;"
+                "export-do"
+            )
+
+        subprocess.run(
+            ["inkscape", str(temp_svg), f"--actions={actions}"],
             capture_output=True,
             text=True,
             check=True,
         )
 
-        # Parse the output SVG to extract the path
+        # Parse the output SVG to extract the path(s)
         output_root = ET.parse(output_path).getroot()
 
-        # Find the resulting path element
-        path_elem = output_root.find(f".//{{{SVG_NS}}}path")
-        if path_elem is None:
-            msg = "Inkscape did not produce a path element"
-            raise RuntimeError(msg)
+        if use_union:
+            # Find the single resulting path element
+            path_elem = output_root.find(f".//{{{SVG_NS}}}path")
+            if path_elem is None:
+                msg = "Inkscape did not produce a path element"
+                raise RuntimeError(msg)
 
-        path_d = path_elem.get("d")
-        if not path_d:
-            msg = "Inkscape path has no 'd' attribute"
-            raise RuntimeError(msg)
+            path_d = path_elem.get("d")
+            if not path_d:
+                msg = "Inkscape path has no 'd' attribute"
+                raise RuntimeError(msg)
 
-        # Extract only outer contours if requested
-        if outer_count is not None:
-            path_d = extract_outer_paths(path_d, outer_count)
+            # Extract only outer contours if requested
+            if outer_count is not None:
+                path_d = extract_outer_paths(path_d, outer_count)
+        else:
+            # Find all paths and extract outer contour from each
+            path_elems = output_root.findall(f".//{{{SVG_NS}}}path")
+            if not path_elems:
+                msg = "Inkscape did not produce any path elements"
+                raise RuntimeError(msg)
+
+            # Extract outer contour (first subpath) from each path
+            outer_paths = []
+            for path_elem in path_elems:
+                d = path_elem.get("d", "")
+                if d:
+                    outer_paths.append(extract_outer_paths(d, 1))
+
+            # Combine all outer paths into one 'd' attribute
+            path_d = " ".join(outer_paths)
 
         return path_d
 
@@ -589,6 +718,7 @@ def compose_icon_svg(
     # 6. Mouth fill
     # 7. Eyes fill
     # 8. All black strokes
+    # 9. Eye reflections (passthrough, above strokes)
 
     # 1. Boundary halo (bottom)
     boundary_halo = create_layer_with_mirror(
@@ -664,25 +794,42 @@ def compose_icon_svg(
             },
         )
 
-    # 7. Eyes fill
-    if "eyes" in fills:
-        ET.SubElement(
-            root,
-            f"{{{SVG_NS}}}path",
-            {
-                "id": "eyes-fill",
-                "d": fills["eyes"],
-                "fill": LAYER_CONFIG["eyes"]["fill"],
-                "stroke": "none",
-            },
-        )
+    # 7. Eyes fill - render directly as filled ellipses (not via path conversion)
+    eyes_config = LAYER_CONFIG.get("eyes", {})
+    if eyes_config.get("fill"):
+        eyes_fill_group = ET.Element(f"{{{SVG_NS}}}g", {"id": "eyes-fill"})
 
-    # 8. All black strokes (skip layers that use clip_to - they have fills, not strokes)
+        # Add original eye with fill
+        for child in layers["eyes"]:
+            elem = deep_copy_element(child)
+            style = elem.get("style", "")
+            style_dict = parse_style_attribute(style) if style else {}
+            style_dict["fill"] = eyes_config["fill"]
+            style_dict["stroke"] = "none"
+            elem.set("style", style_dict_to_string(style_dict))
+            eyes_fill_group.append(elem)
+
+        # Add mirrored eye with fill
+        mirror_group = ET.Element(f"{{{SVG_NS}}}g", {"transform": MIRROR_TRANSFORM})
+        for child in layers["eyes"]:
+            elem = deep_copy_element(child)
+            style = elem.get("style", "")
+            style_dict = parse_style_attribute(style) if style else {}
+            style_dict["fill"] = eyes_config["fill"]
+            style_dict["stroke"] = "none"
+            elem.set("style", style_dict_to_string(style_dict))
+            mirror_group.append(elem)
+        eyes_fill_group.append(mirror_group)
+
+        root.append(eyes_fill_group)
+
+    # 8. All black strokes (skip clipped and passthrough layers)
     strokes_group = ET.SubElement(root, f"{{{SVG_NS}}}g", {"id": "strokes"})
 
     for label, config in LAYER_CONFIG.items():
-        if config.get("clip_to"):
-            continue  # Skip clipped layers - they don't have strokes
+        # Skip clipped/passthrough layers - they don't get stroke processing
+        if config.get("clip_to") or config.get("passthrough"):
+            continue
         layer_strokes = create_layer_with_mirror(
             layers[label],
             stroke=BLACK,
@@ -692,6 +839,63 @@ def compose_icon_svg(
             group_id=f"{label}-strokes",
         )
         strokes_group.append(layer_strokes)
+
+    # 9. Eye highlights (passthrough - render as-is, above strokes)
+    eye_highlights_config = LAYER_CONFIG.get("eye highlights", {})
+    if eye_highlights_config.get("passthrough") and "eye highlights" in layers:
+        eye_highlights_group = ET.Element(f"{{{SVG_NS}}}g", {"id": "eye-highlights"})
+
+        # Add original highlights
+        for child in layers["eye highlights"]:
+            eye_highlights_group.append(deep_copy_element(child))
+
+        # Add highlights for the other eye (if mirroring enabled)
+        should_mirror = eye_highlights_config.get("mirror", True)
+        if should_mirror:
+            if eye_highlights_config.get("mirror_preserve_orientation"):
+                # Translate all highlights by the same amount to move them to the
+                # other eye while preserving their relative positions/orientations.
+                # Translation = 256 - 2 * eye_center_x (distance between eye centers)
+                # Get eye center from the eyes layer (accounting for transform).
+                eye_center_x = None
+                for child in layers["eyes"]:
+                    cx = child.get("cx")
+                    if cx is not None:
+                        # Apply transform if present
+                        transform = child.get("transform", "")
+                        if transform.startswith("matrix("):
+                            # Parse matrix(a,b,c,d,e,f)
+                            values = transform[7:-1].split(",")
+                            a, c, e = (
+                                float(values[0]),
+                                float(values[2]),
+                                float(values[4]),
+                            )
+                            cy_val = child.get("cy")
+                            if cy_val is not None:
+                                eye_center_x = a * float(cx) + c * float(cy_val) + e
+                        else:
+                            eye_center_x = float(cx)
+                        break
+
+                if eye_center_x is not None:
+                    translation = 256 - 2 * eye_center_x
+                    translated_group = ET.Element(
+                        f"{{{SVG_NS}}}g", {"transform": f"translate({translation}, 0)"}
+                    )
+                    for child in layers["eye highlights"]:
+                        translated_group.append(deep_copy_element(child))
+                    eye_highlights_group.append(translated_group)
+            else:
+                # Simple mirror
+                mirror_group = ET.Element(
+                    f"{{{SVG_NS}}}g", {"transform": MIRROR_TRANSFORM}
+                )
+                for child in layers["eye highlights"]:
+                    mirror_group.append(deep_copy_element(child))
+                eye_highlights_group.append(mirror_group)
+
+        root.append(eye_highlights_group)
 
     # Convert to string
     return ET.tostring(root, encoding="unicode")
@@ -715,13 +919,34 @@ def export_png(svg_path: Path, output_path: Path, size: int) -> None:
     )
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Generate brand icons from source SVG line art.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--override-version-check",
+        action="store_true",
+        help=(
+            "Allow running with an Inkscape version different from the tested "
+            f"version ({TESTED_INKSCAPE_VERSION[0]}.{TESTED_INKSCAPE_VERSION[1]}."
+            f"{TESTED_INKSCAPE_VERSION[2]}). Output may differ due to changes in "
+            "the Inkscape action API between versions."
+        ),
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     """Generate brand icons from source SVG."""
+    args = parse_args()
+
     print("Generating brand icons...")  # noqa: T201
 
     # Check prerequisites
-    check_inkscape()
-    print("  Inkscape CLI: OK")  # noqa: T201
+    version_info = check_inkscape(override_version_check=args.override_version_check)
+    print(f"  Inkscape CLI: {version_info}")  # noqa: T201
 
     print(f"  Source: {SOURCE_SVG}")  # noqa: T201
 
@@ -729,12 +954,18 @@ def main() -> None:
     tree = ET.parse(SOURCE_SVG)
     source_root = tree.getroot()
 
-    # Find all required layers
+    # Find all required layers (passthrough layers are optional)
     print("  Finding layers...")  # noqa: T201
     layers: dict[str, ET.Element] = {}
-    for label in LAYER_CONFIG:
-        layers[label] = find_layer_by_label(source_root, label)
-        print(f"    Found: {label}")  # noqa: T201
+    for label, config in LAYER_CONFIG.items():
+        try:
+            layers[label] = find_layer_by_label(source_root, label)
+            print(f"    Found: {label}")  # noqa: T201
+        except ValueError:
+            if config.get("passthrough"):
+                print(f"    Optional layer not found: {label}")  # noqa: T201
+            else:
+                raise
 
     # Get stroke width (from boundary layer)
     stroke_width = get_layer_stroke_width(layers["boundary"])
@@ -750,13 +981,11 @@ def main() -> None:
     for label, config in LAYER_CONFIG.items():
         fill_config = config.get("fill")
         # Skip layers with no fill or that use clip_to (handled via clipPath in SVG)
-        if not fill_config or config.get("clip_to"):
+        # Also skip eyes - they'll be rendered directly as filled ellipses
+        if not fill_config or config.get("clip_to") or label == "eyes":
             continue
         print(f"    {label}...")  # noqa: T201
-        # Extract outer contours only (stroke-to-path creates inner holes)
-        # Eyes need 2 contours (left and right eye)
-        outer_count = 2 if label == "eyes" else 1
-        fills[label] = create_fill_shape_for_layer(layers[label], outer_count)
+        fills[label] = create_fill_shape_for_layer(layers[label], outer_count=1)
         print(f"    {label}: OK")  # noqa: T201
 
     # Compose output SVG
