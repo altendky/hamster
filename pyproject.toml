@@ -44,6 +44,8 @@ dev = [
     "hamster[test,component-test]",
     "ruff>=0.11",
     "mypy",
+    "cairosvg",
+    "Pillow",
 ]
 # Component tests — requires Home Assistant test infrastructure
 component-test = [
