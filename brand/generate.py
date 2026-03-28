@@ -15,27 +15,19 @@ Layer requirements:
     - "eye highlights": Highlight shapes — passthrough (mirrored, preserved orientation)
 
 Requirements:
-    - Inkscape CLI 1.4.3 (`inkscape` in PATH) — tested version
-    - cairosvg, Pillow (Python packages)
+    - cairosvg (Python package) — for PNG export
 
 Usage:
     python brand/generate.py
     # or via mise:
     mise run generate-icons
-
-    # To run with a different Inkscape version (output may differ):
-    python brand/generate.py --override-version-check
 """
 
 from __future__ import annotations
 
-import argparse
 import copy
 from pathlib import Path
 import re
-import shutil
-import subprocess
-import tempfile
 import xml.etree.ElementTree as ET
 
 # Brand colors
@@ -94,92 +86,397 @@ OUTPUT_DIR = BRAND_DIR.parent / "custom_components" / "hamster" / "brand"
 # SVG namespaces
 SVG_NS = "http://www.w3.org/2000/svg"
 INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
-SODIPODI_NS = "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
 
 
-# Tested Inkscape version - script behavior verified with this exact version
-# Other versions may produce different output due to Inkscape action API changes
-TESTED_INKSCAPE_VERSION = (1, 4, 3)
+# ---------------------------------------------------------------------------
+# SVG path parsing and manipulation
+# ---------------------------------------------------------------------------
+
+# A "segment" is (command, [(x, y), ...]) where all coordinates are absolute.
+PathSegment = tuple[str, list[tuple[float, float]]]
 
 
-def get_inkscape_version() -> tuple[int, int, int] | None:
-    """Get the installed Inkscape version as a tuple (major, minor, patch).
+def _tokenize_path_d(d: str) -> list[str]:
+    """Split an SVG path 'd' attribute into command letters and number tokens."""
+    # Insert space before every command letter (but not inside numbers like 1e-5)
+    # and before minus signs that start a new number.
+    tokens: list[str] = []
+    buf = ""
+    for ch in d:
+        if ch in "MmLlCcSsQqTtAaHhVvZz":
+            if buf.strip():
+                tokens.append(buf.strip())
+            tokens.append(ch)
+            buf = ""
+        elif ch in " ,\t\n\r":
+            if buf.strip():
+                tokens.append(buf.strip())
+            buf = ""
+        elif ch == "-" and buf.strip() and buf.strip()[-1] not in "eE":
+            # Minus sign starts a new number (unless after exponent)
+            if buf.strip():
+                tokens.append(buf.strip())
+            buf = ch
+        else:
+            buf += ch
+    if buf.strip():
+        tokens.append(buf.strip())
+    return tokens
+
+
+def _parse_path_to_absolute(d: str) -> list[PathSegment]:
+    """Parse an SVG path 'd' string into a list of absolute-coordinate segments.
+
+    Only handles M/m, L/l, C/c commands (and Z/z) which are what the boundary
+    layer uses.  Returns segments as (command, points) where command is one of
+    'M', 'L', 'C', 'Z' and points are absolute (x, y) tuples.
+    """
+    tokens = _tokenize_path_d(d)
+    segments: list[PathSegment] = []
+    cx, cy = 0.0, 0.0  # current point
+    i = 0
+
+    while i < len(tokens):
+        cmd = tokens[i]
+        i += 1
+
+        if cmd in "Zz":
+            segments.append(("Z", []))
+            continue
+
+        # Collect numbers for this command
+        nums: list[float] = []
+        while i < len(tokens) and tokens[i] not in "MmLlCcSsQqTtAaHhVvZz":
+            nums.append(float(tokens[i]))
+            i += 1
+
+        if cmd == "M":
+            # Absolute moveto (first pair is moveto, subsequent pairs are lineto)
+            j = 0
+            while j < len(nums):
+                cx, cy = nums[j], nums[j + 1]
+                segments.append(("M" if j == 0 else "L", [(cx, cy)]))
+                j += 2
+        elif cmd == "m":
+            j = 0
+            while j < len(nums):
+                cx += nums[j]
+                cy += nums[j + 1]
+                segments.append(("M" if j == 0 else "L", [(cx, cy)]))
+                j += 2
+        elif cmd == "L":
+            j = 0
+            while j < len(nums):
+                cx, cy = nums[j], nums[j + 1]
+                segments.append(("L", [(cx, cy)]))
+                j += 2
+        elif cmd == "l":
+            j = 0
+            while j < len(nums):
+                cx += nums[j]
+                cy += nums[j + 1]
+                segments.append(("L", [(cx, cy)]))
+                j += 2
+        elif cmd == "C":
+            j = 0
+            while j < len(nums):
+                p1 = (nums[j], nums[j + 1])
+                p2 = (nums[j + 2], nums[j + 3])
+                p3 = (nums[j + 4], nums[j + 5])
+                segments.append(("C", [p1, p2, p3]))
+                cx, cy = p3
+                j += 6
+        elif cmd == "c":
+            j = 0
+            while j < len(nums):
+                p1 = (cx + nums[j], cy + nums[j + 1])
+                p2 = (cx + nums[j + 2], cy + nums[j + 3])
+                p3 = (cx + nums[j + 4], cy + nums[j + 5])
+                segments.append(("C", [p1, p2, p3]))
+                cx, cy = p3
+                j += 6
+        else:
+            msg = f"Unsupported SVG path command: {cmd}"
+            raise ValueError(msg)
+
+    return segments
+
+
+def _segments_endpoint(segments: list[PathSegment]) -> tuple[float, float]:
+    """Return the endpoint of the last drawing segment."""
+    for seg in reversed(segments):
+        cmd, pts = seg
+        if cmd == "Z":
+            continue
+        if pts:
+            return pts[-1]
+    msg = "No drawable segments found"
+    raise ValueError(msg)
+
+
+def _segments_startpoint(segments: list[PathSegment]) -> tuple[float, float]:
+    """Return the start point of the first segment (should be M)."""
+    for seg in segments:
+        cmd, pts = seg
+        if cmd == "M" and pts:
+            return pts[0]
+    msg = "No moveto segment found"
+    raise ValueError(msg)
+
+
+def _reverse_segments(segments: list[PathSegment]) -> list[PathSegment]:
+    """Reverse the drawing direction of a list of path segments.
+
+    The input must start with an M segment and contain only M, L, C segments
+    (no Z).  Returns a new segment list that draws the same shape in reverse,
+    starting with an M at the old endpoint.
+    """
+    # Build list of (segment, start_point) working forwards
+    drawing: list[tuple[str, list[tuple[float, float]], tuple[float, float]]] = []
+    current = _segments_startpoint(segments)
+    for cmd, pts in segments:
+        if cmd == "M":
+            current = pts[0]
+            continue
+        drawing.append((cmd, pts, current))
+        current = pts[-1]
+
+    # Walk backwards
+    result: list[PathSegment] = [("M", [current])]  # start at old endpoint
+    for cmd, pts, start in reversed(drawing):
+        if cmd == "L":
+            result.append(("L", [start]))
+        elif cmd == "C":
+            # C has [cp1, cp2, end] — reversed becomes [cp2, cp1, old_start]
+            cp1, cp2, _end = pts
+            result.append(("C", [cp2, cp1, start]))
+        else:
+            msg = f"Cannot reverse command: {cmd}"
+            raise ValueError(msg)
+
+    return result
+
+
+def _mirror_x_segments(
+    segments: list[PathSegment], axis: float = 256.0
+) -> list[PathSegment]:
+    """Mirror segments horizontally around x = axis/2 (i.e., x' = axis - x)."""
+    result: list[PathSegment] = []
+    for cmd, pts in segments:
+        mirrored_pts = [(axis - x, y) for x, y in pts]
+        result.append((cmd, mirrored_pts))
+    return result
+
+
+def _segments_to_d(segments: list[PathSegment]) -> str:
+    """Convert absolute-coordinate segments back to an SVG path 'd' string."""
+    parts: list[str] = []
+    for cmd, pts in segments:
+        if cmd == "Z":
+            parts.append("Z")
+        elif cmd == "M":
+            x, y = pts[0]
+            parts.append(f"M {x},{y}")
+        elif cmd == "L":
+            x, y = pts[0]
+            parts.append(f"L {x},{y}")
+        elif cmd == "C":
+            coords = " ".join(f"{x},{y}" for x, y in pts)
+            parts.append(f"C {coords}")
+    return " ".join(parts)
+
+
+def _extract_path_d(element: ET.Element) -> str:
+    """Get the 'd' attribute from a path element."""
+    d = element.get("d")
+    if d is None:
+        msg = f"Element {element.get('id', '?')} has no 'd' attribute"
+        raise ValueError(msg)
+    return d
+
+
+def create_boundary_center_path(layer: ET.Element) -> str:
+    """Build a closed path tracing the center of the boundary strokes.
+
+    Takes the boundary layer's paths, parses them into absolute coordinates,
+    then assembles a closed contour by connecting them (with line segments
+    where gaps exist) and mirroring to form the complete face outline.
+
+    The ordering of paths in the source layer matters:
+        - path2344 (ear/head curve): connects ear tip to forehead area
+        - path3544 (cheek curve): connects cheek to chin
+        - path4458 (forehead connector): connects forehead to center line
+
+    The closed contour traces:
+        path3 (fwd) → path1 (rev) → path2 (fwd) →
+        mirror-path2 (rev) → mirror-path1 (fwd) → mirror-path3 (rev) → Z
+
+    Gaps between paths are bridged with straight line segments.
 
     Returns:
-        Version tuple, or None if version cannot be determined.
+        An SVG path 'd' attribute for the closed center-line boundary.
     """
-    try:
-        result = subprocess.run(
-            ["inkscape", "--version"],
-            capture_output=True,
-            text=True,
-            check=True,
+    # Extract path elements from the layer
+    path_elements = [
+        elem
+        for elem in layer.iter()
+        if elem.tag == f"{{{SVG_NS}}}path" or elem.tag == "path"
+    ]
+
+    if len(path_elements) != 3:
+        msg = (
+            f"Expected 3 boundary paths, found {len(path_elements)}. "
+            f"IDs: {[e.get('id', '?') for e in path_elements]}"
         )
-        # Output format: "Inkscape 1.4.3 (1:1.4.3+202512261034+0d15f75042)"
-        match = re.search(r"Inkscape\s+(\d+)\.(\d+)(?:\.(\d+))?", result.stdout)
-        if match:
-            major = int(match.group(1))
-            minor = int(match.group(2))
-            patch = int(match.group(3)) if match.group(3) else 0
-            return (major, minor, patch)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-    return None
+        raise ValueError(msg)
+
+    # Parse all three paths to absolute coordinates
+    # Order in source: path2344 (ear), path3544 (cheek), path4458 (forehead)
+    parsed = [_parse_path_to_absolute(_extract_path_d(e)) for e in path_elements]
+
+    ear_segs = parsed[0]  # path2344: ear/head curve
+    cheek_segs = parsed[1]  # path3544: cheek curve
+    forehead_segs = parsed[2]  # path4458: forehead connector
+
+    # Build the closed contour.
+    #
+    # Working order (going clockwise around the left side of the face,
+    # then the mirrored right side):
+    #
+    #   forehead reversed:  (128, ~52) → (~88, ~60)
+    #   line to ear end:    → (~98, ~52)
+    #   ear reversed:       → (~55, ~132)
+    #   line to cheek start: → (~64, ~124)
+    #   cheek forward:      → (128, ~251)
+    #   --- mirror side ---
+    #   mirror cheek rev:   → (~192, ~124)
+    #   line to mirror ear start: → (~201, ~132)
+    #   mirror ear fwd:     → (~158, ~52)
+    #   line to mirror forehead start: → (~168, ~60)
+    #   mirror forehead fwd: → (~128, ~52)
+    #   Z (close)
+
+    forehead_rev = _reverse_segments(forehead_segs)
+    ear_rev = _reverse_segments(ear_segs)
+
+    mirror_cheek_rev = _mirror_x_segments(_reverse_segments(cheek_segs))
+    mirror_ear_fwd = _mirror_x_segments(ear_segs)
+    mirror_forehead_fwd = _mirror_x_segments(forehead_segs)
+
+    # Assemble: start with the M from forehead_rev, then append the rest
+    contour: list[PathSegment] = []
+
+    # 1. Forehead reversed (starts with M at ~128, ~52)
+    contour.extend(forehead_rev)
+
+    # 2. Line bridge to ear end, then ear reversed
+    ear_rev_start = _segments_startpoint(ear_rev)
+    contour.append(("L", [ear_rev_start]))
+    contour.extend(ear_rev[1:])  # skip M
+
+    # 3. Line bridge to cheek start, then cheek forward
+    cheek_start = _segments_startpoint(cheek_segs)
+    contour.append(("L", [cheek_start]))
+    contour.extend(cheek_segs[1:])  # skip M
+
+    # 4. Cross to mirror side: mirror cheek reversed
+    mirror_cheek_rev_start = _segments_startpoint(mirror_cheek_rev)
+    contour.append(("L", [mirror_cheek_rev_start]))
+    contour.extend(mirror_cheek_rev[1:])  # skip M
+
+    # 5. Line bridge to mirror ear start, then mirror ear forward
+    mirror_ear_start = _segments_startpoint(mirror_ear_fwd)
+    contour.append(("L", [mirror_ear_start]))
+    contour.extend(mirror_ear_fwd[1:])  # skip M
+
+    # 6. Line bridge to mirror forehead start, then mirror forehead forward
+    mirror_forehead_start = _segments_startpoint(mirror_forehead_fwd)
+    contour.append(("L", [mirror_forehead_start]))
+    contour.extend(mirror_forehead_fwd[1:])  # skip M
+
+    # 7. Close
+    contour.append(("Z", []))
+
+    return _segments_to_d(contour)
 
 
-def check_inkscape(*, override_version_check: bool = False) -> str:
-    """Verify Inkscape CLI is available and matches tested version.
+def create_mirrored_center_path(layer: ET.Element) -> str:
+    """Build a closed path from a layer's strokes and their mirror.
 
-    This script was tested with a specific Inkscape version. Running with a
-    different version may produce different output due to changes in the
-    Inkscape action API (e.g., path-union behavior).
+    For layers where every path starts or ends on the center line (x=128),
+    this creates a closed contour by tracing the original paths and their
+    mirrored counterparts.
 
-    Args:
-        override_version_check: If True, allow running with untested versions.
+    Single-path layers (e.g., nose):
+        The path runs from center to center on the left side.  The mirror
+        runs center to center on the right.  Together: original forward →
+        mirror reversed → Z.
+
+    Multi-path layers (e.g., mouth):
+        Paths are sorted by their start-y coordinate (topmost first).
+        The contour traces: path1 reversed → line → path2 forward →
+        mirror-path2 reversed → line → mirror-path1 forward → Z.
 
     Returns:
-        Version string for display.
-
-    Raises:
-        RuntimeError: If Inkscape is not found or version doesn't match.
+        An SVG path 'd' attribute for the closed center-line shape.
     """
-    if shutil.which("inkscape") is None:
-        msg = (
-            "Inkscape CLI not found in PATH. "
-            "Install Inkscape and ensure 'inkscape' is accessible."
-        )
-        raise RuntimeError(msg)
+    path_elements = [
+        elem
+        for elem in layer.iter()
+        if elem.tag == f"{{{SVG_NS}}}path" or elem.tag == "path"
+    ]
 
-    version = get_inkscape_version()
-    if version is None:
-        if override_version_check:
-            return "unknown (override enabled)"
-        msg = (
-            "Could not determine Inkscape version. "
-            "Use --override-version-check to bypass this check."
-        )
-        raise RuntimeError(msg)
+    if not path_elements:
+        msg = "No path elements found in layer"
+        raise ValueError(msg)
 
-    version_str = f"{version[0]}.{version[1]}.{version[2]}"
-    tested_str = (
-        f"{TESTED_INKSCAPE_VERSION[0]}."
-        f"{TESTED_INKSCAPE_VERSION[1]}."
-        f"{TESTED_INKSCAPE_VERSION[2]}"
-    )
+    parsed = [_parse_path_to_absolute(_extract_path_d(e)) for e in path_elements]
 
-    if version != TESTED_INKSCAPE_VERSION:
-        if override_version_check:
-            return f"{version_str} (override enabled, tested with {tested_str})"
-        msg = (
-            f"Inkscape {version_str} found, but this script was tested with "
-            f"{tested_str}. Different versions may produce different output due "
-            f"to changes in the Inkscape action API (e.g., path-union behavior "
-            f"differs between 1.1.x and 1.4.x). "
-            f"Use --override-version-check to run anyway."
-        )
-        raise RuntimeError(msg)
+    if len(parsed) == 1:
+        # Single path (e.g., nose): fwd + mirror reversed + Z
+        segs = parsed[0]
+        mirror_rev = _mirror_x_segments(_reverse_segments(segs))
 
-    return version_str
+        contour: list[PathSegment] = []
+        contour.extend(segs)
+        contour.extend(mirror_rev[1:])  # skip M
+        contour.append(("Z", []))
+        return _segments_to_d(contour)
+
+    # Multi-path: sort by start-y so we have a consistent winding order.
+    # For the mouth: path1 ends at top (186), path2 ends at bottom (227).
+    # We want: path1 reversed (top→left) → path2 forward (left→bottom)
+    #        → mirror-path2 reversed (bottom→right) → mirror-path1 forward
+    #          (right→top) → Z
+    # Sort paths so the one ending at the highest y (smallest y) is first.
+    parsed.sort(key=lambda s: _segments_endpoint(s)[1])
+
+    contour = []
+
+    # Left side: first path reversed, then bridge + subsequent paths forward
+    first_rev = _reverse_segments(parsed[0])
+    contour.extend(first_rev)
+
+    for i in range(1, len(parsed)):
+        seg_start = _segments_startpoint(parsed[i])
+        contour.append(("L", [seg_start]))
+        contour.extend(parsed[i][1:])  # skip M
+
+    # Right side (mirror): last path reversed, then bridge + earlier paths forward
+    for i in range(len(parsed) - 1, -1, -1):
+        if i == len(parsed) - 1:
+            mirror_last_rev = _mirror_x_segments(_reverse_segments(parsed[i]))
+            mirror_start = _segments_startpoint(mirror_last_rev)
+            contour.append(("L", [mirror_start]))
+            contour.extend(mirror_last_rev[1:])  # skip M
+        else:
+            mirror_fwd = _mirror_x_segments(parsed[i])
+            mirror_start = _segments_startpoint(mirror_fwd)
+            contour.append(("L", [mirror_start]))
+            contour.extend(mirror_fwd[1:])  # skip M
+
+    contour.append(("Z", []))
+    return _segments_to_d(contour)
 
 
 def parse_style_attribute(style: str) -> dict[str, str]:
@@ -369,176 +666,6 @@ def create_layer_with_mirror(
     output_group.append(mirrored)
 
     return output_group
-
-
-def create_temp_svg_for_layer(
-    layer: ET.Element,
-    viewbox: str = "0 0 256 256",
-    include_mirror: bool = True,
-) -> Path:
-    """Create a temporary SVG file containing just a layer's content.
-
-    Args:
-        layer: The layer element to extract.
-        viewbox: The viewBox for the temp SVG.
-        include_mirror: If True, include mirrored content.
-
-    Returns:
-        Path to the temporary SVG file.
-    """
-    ET.register_namespace("", SVG_NS)
-
-    root = ET.Element(
-        f"{{{SVG_NS}}}svg",
-        {
-            "viewBox": viewbox,
-            "width": "256",
-            "height": "256",
-        },
-    )
-
-    # Add original content
-    for child in layer:
-        root.append(deep_copy_element(child))
-
-    # Add mirrored content
-    if include_mirror:
-        mirror_group = ET.Element(f"{{{SVG_NS}}}g", {"transform": MIRROR_TRANSFORM})
-        for child in layer:
-            mirror_group.append(deep_copy_element(child))
-        root.append(mirror_group)
-
-    # Write to temp file
-    with tempfile.NamedTemporaryFile(suffix=".svg", delete=False, mode="w") as tmp:
-        tmp.write(ET.tostring(root, encoding="unicode"))
-        return Path(tmp.name)
-
-
-def extract_outer_paths(path_d: str, count: int = 1) -> str:
-    """Extract outer contours from a path with holes.
-
-    The stroke-to-path + union operation creates a path where the first
-    subpath(s) are outer boundaries and subsequent subpaths are inner holes.
-    This function extracts the specified number of outer boundaries.
-
-    Args:
-        path_d: The full path 'd' attribute.
-        count: Number of outer contours to extract.
-
-    Returns:
-        The 'd' attribute containing only the outer contour(s).
-    """
-    # Find 'z' or 'Z' commands that close subpaths
-    # Extract the first `count` subpaths
-    z_count = 0
-    for i, char in enumerate(path_d):
-        if char in "zZ":
-            z_count += 1
-            if z_count >= count:
-                return path_d[: i + 1]
-    return path_d
-
-
-def create_fill_shape_for_layer(
-    layer: ET.Element,
-    outer_count: int | None = 1,
-    *,
-    use_union: bool = True,
-) -> str:
-    """Use Inkscape to create a fill shape from a layer's strokes.
-
-    Args:
-        layer: The layer element containing stroke paths.
-        outer_count: Number of outer contours to extract. Use None to keep all.
-            When mirroring creates two separate shapes (like eyes), use 2.
-        use_union: If True, union all paths together. If False, keep separate
-            and extract outer contour from each path individually.
-
-    Returns:
-        The 'd' attribute of the resulting filled path.
-    """
-    # Create temp SVG with layer content (original + mirrored)
-    temp_svg = create_temp_svg_for_layer(layer, include_mirror=True)
-
-    # Output temp file
-    with tempfile.NamedTemporaryFile(suffix=".svg", delete=False) as tmp:
-        output_path = Path(tmp.name)
-
-    try:
-        # Build Inkscape actions
-        if use_union:
-            # Use path-union action instead of verb:SelectionUnion for better
-            # compatibility across Inkscape versions
-            actions = (
-                "select-all;"
-                "object-stroke-to-path;"
-                "select-all;"
-                "path-union;"
-                f"export-filename:{output_path};"
-                "export-plain-svg;"
-                "export-do"
-            )
-        else:
-            # No union - stroke-to-path and ungroup to flatten transforms
-            actions = (
-                "select-all;"
-                "object-stroke-to-path;"
-                "select-all;"
-                "verb:SelectionUnGroup;"
-                "select-all;"
-                "verb:SelectionUnGroup;"
-                f"export-filename:{output_path};"
-                "export-plain-svg;"
-                "export-do"
-            )
-
-        subprocess.run(
-            ["inkscape", str(temp_svg), f"--actions={actions}"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-        # Parse the output SVG to extract the path(s)
-        output_root = ET.parse(output_path).getroot()
-
-        if use_union:
-            # Find the single resulting path element
-            path_elem = output_root.find(f".//{{{SVG_NS}}}path")
-            if path_elem is None:
-                msg = "Inkscape did not produce a path element"
-                raise RuntimeError(msg)
-
-            path_d = path_elem.get("d")
-            if not path_d:
-                msg = "Inkscape path has no 'd' attribute"
-                raise RuntimeError(msg)
-
-            # Extract only outer contours if requested
-            if outer_count is not None:
-                path_d = extract_outer_paths(path_d, outer_count)
-        else:
-            # Find all paths and extract outer contour from each
-            path_elems = output_root.findall(f".//{{{SVG_NS}}}path")
-            if not path_elems:
-                msg = "Inkscape did not produce any path elements"
-                raise RuntimeError(msg)
-
-            # Extract outer contour (first subpath) from each path
-            outer_paths = []
-            for path_elem in path_elems:
-                d = path_elem.get("d", "")
-                if d:
-                    outer_paths.append(extract_outer_paths(d, 1))
-
-            # Combine all outer paths into one 'd' attribute
-            path_d = " ".join(outer_paths)
-
-        return path_d
-
-    finally:
-        temp_svg.unlink(missing_ok=True)
-        output_path.unlink(missing_ok=True)
 
 
 def create_clipped_layer(
@@ -919,35 +1046,9 @@ def export_png(svg_path: Path, output_path: Path, size: int) -> None:
     )
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Generate brand icons from source SVG line art.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "--override-version-check",
-        action="store_true",
-        help=(
-            "Allow running with an Inkscape version different from the tested "
-            f"version ({TESTED_INKSCAPE_VERSION[0]}.{TESTED_INKSCAPE_VERSION[1]}."
-            f"{TESTED_INKSCAPE_VERSION[2]}). Output may differ due to changes in "
-            "the Inkscape action API between versions."
-        ),
-    )
-    return parser.parse_args()
-
-
 def main() -> None:
     """Generate brand icons from source SVG."""
-    args = parse_args()
-
     print("Generating brand icons...")  # noqa: T201
-
-    # Check prerequisites
-    version_info = check_inkscape(override_version_check=args.override_version_check)
-    print(f"  Inkscape CLI: {version_info}")  # noqa: T201
-
     print(f"  Source: {SOURCE_SVG}")  # noqa: T201
 
     # Parse source SVG
@@ -985,7 +1086,12 @@ def main() -> None:
         if not fill_config or config.get("clip_to") or label == "eyes":
             continue
         print(f"    {label}...")  # noqa: T201
-        fills[label] = create_fill_shape_for_layer(layers[label], outer_count=1)
+        if label == "boundary":
+            fills[label] = create_boundary_center_path(layers[label])
+        else:
+            # Nose, mouth — paths start/end on the x=128 center line and
+            # form closed shapes when mirrored.
+            fills[label] = create_mirrored_center_path(layers[label])
         print(f"    {label}: OK")  # noqa: T201
 
     # Compose output SVG
