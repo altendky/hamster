@@ -5,20 +5,20 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
 [![CI](https://github.com/altendky/hamster/actions/workflows/ci.yml/badge.svg)](https://github.com/altendky/hamster/actions/workflows/ci.yml)
 
-Home Assistant MCP Server --- exposes HA's full capabilities via the
+Home Assistant MCP Server — exposes HA's full capabilities via the
 [Model Context Protocol](https://modelcontextprotocol.io/).
 
 ## What Is This?
 
 Hamster is a Home Assistant custom component that runs an
 [MCP](https://modelcontextprotocol.io/) server inside your HA instance.
-It lets AI assistants and other MCP clients --- such as Claude Desktop,
-OpenCode, Cursor, or any tool that speaks the Model Context Protocol --- interact
+It lets AI assistants and other MCP clients — such as Claude Desktop,
+OpenCode, Cursor, or any tool that speaks the Model Context Protocol — interact
 with your smart home: query states, call services, browse registries,
 debug automations, and more.
 
 Hamster discovers all available services and their schemas automatically
-at runtime --- no static tool definitions to maintain.
+at runtime — no static tool definitions to maintain.
 
 The MCP endpoint is served by Home Assistant itself, so it is reachable
 wherever your HA instance is.
@@ -33,17 +33,17 @@ remote MCP clients such as Claude.ai and ChatGPT can connect as well.
 
 ## Key Features
 
-- **Dynamic tool generation** from `hass.services.async_services()` --- no
+- **Dynamic tool generation** from `hass.services.async_services()` — no
   static tool definitions
-- **Built-in HA authentication** via `HomeAssistantView` --- no separate
+- **Built-in HA authentication** via `HomeAssistantView` — no separate
   tokens or OAuth setup
-- **Sans-IO protocol core** --- fully testable without mocking
+- **Sans-IO protocol core** — fully testable without mocking
 - **Three command groups** covering HA's full surface:
-  - **Services** --- all HA service actions (lights, climate, automations,
+  - **Services** — all HA service actions (lights, climate, automations,
     media, notifications, etc.), dynamically discovered at runtime
-  - **Hass** --- WebSocket API commands for states, entity/device/area
+  - **Hass** — WebSocket API commands for states, entity/device/area
     registries, templates, and config management
-  - **Supervisor** --- system-level access to logs, host info, add-ons,
+  - **Supervisor** — system-level access to logs, host info, add-ons,
     backups, and networking (available on HA OS / Supervised installs)
 
 ## Requirements
@@ -73,30 +73,27 @@ remote MCP clients such as Claude.ai and ChatGPT can connect as well.
 
 ## Usage
 
-After installation, the MCP server is available at:
+Point your MCP client at your Home Assistant instance with these settings:
 
-```text
-POST https://<your-ha-host>/api/hamster
-```
+- **URL:** `https://<your-ha-host>/api/hamster`
+- **Transport:** Streamable HTTP
+- **Authentication:** MCP clients that support OAuth (such as OpenCode)
+  will prompt you to log in through Home Assistant automatically.
+  For clients that require a static token, create a
+  [Long-Lived Access Token](https://www.home-assistant.io/docs/authentication/#your-account-profile)
+  in your HA user profile and provide it as a Bearer token.
 
-This uses the [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http)
-MCP transport. Authentication is handled by Home Assistant --- create a
-**Long-Lived Access Token** in your HA user profile (under Security) and pass
-it as a Bearer token:
+### Options
 
-```text
-Authorization: Bearer <your-token>
-```
+The integration works out of the box with no configuration.
+Optional settings are available under the integration's **Configure** button:
 
-### Configuration
-
-The integration requires no configuration to get started --- just confirm the
-setup when adding it. Optional settings are available under the integration's
-**Configure** button:
-
-- **Auto-fetch docs on startup** --- automatically fetch WebSocket API
+- **Auto-fetch docs on startup** — automatically fetch WebSocket API
   documentation for richer tool descriptions (default: on)
-- **Docs URL / Git ref** --- customize the source for WebSocket API docs
+- **Docs URL template** — URL for fetching WebSocket API docs; use
+  `{ref}` as placeholder for the git ref
+- **Git ref for docs** — branch, tag, or commit to fetch docs from
+  (default: `master`)
 
 ## Documentation
 
