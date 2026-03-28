@@ -10,3 +10,7 @@ gitignore: true
 config:
   # Disable line length checking --- we use semantic newlines
   MD013: false
+  # Allow <img> for sized icon in README heading
+  MD033:
+    allowed_elements:
+      - img

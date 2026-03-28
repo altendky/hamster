@@ -17,5 +17,5 @@ all available services and their schemas automatically.
 
 ## Status
 
-Pre-alpha.
-Not yet functional.
+Beta.
+Functional and ready for testing and feedback.

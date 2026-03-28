@@ -9,5 +9,5 @@
   "issue_tracker": "https://github.com/altendky/hamster/issues",
   "requirements": ["hamster@git+https://github.com/altendky/hamster.git@main"],
   "single_config_entry": true,
-  "version": "0.0.1"
+  "version": "0.1.0"
 }

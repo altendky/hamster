@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hamster"
-version = "0.0.1"
+version = "0.1.0"
 description = "Home Assistant MCP Server — exposes HA capabilities via the Model Context Protocol"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
@@ -19,7 +19,7 @@ authors = [
 ]
 keywords = ["home-assistant", "mcp", "model-context-protocol", "home-automation"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
