@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import copy
+import math
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
@@ -570,18 +571,38 @@ def find_layer_by_label(root: ET.Element, label: str) -> ET.Element:
 
 
 def get_layer_stroke_width(layer: ET.Element) -> float | None:
-    """Get the stroke width used in a layer (assumes uniform width)."""
+    """Get the uniform stroke width used in a layer.
+
+    Scans all stroked elements and verifies they share the same width.
+
+    Raises:
+        ValueError: If stroked elements have different stroke widths.
+    """
+    widths: set[float] = set()
     for elem in layer.iter():
         if has_stroke(elem):
             width = get_stroke_width(elem)
             if width is not None:
-                return width
-    return None
+                widths.add(width)
+    if not widths:
+        return None
+    if len(widths) > 1:
+        msg = f"Non-uniform stroke widths in layer: {sorted(widths)}"
+        raise ValueError(msg)
+    return next(iter(widths))
 
 
 def deep_copy_element(elem: ET.Element) -> ET.Element:
-    """Create a deep copy of an element and all its children."""
-    return copy.deepcopy(elem)
+    """Create a deep copy of an element, stripping ``id`` attributes.
+
+    Copied elements lose their ``id`` to avoid duplicate IDs in the
+    output SVG.  Intentional IDs (e.g. ``boundary-clip``) are assigned
+    explicitly on freshly created elements, not on copies.
+    """
+    clone = copy.deepcopy(elem)
+    for node in clone.iter():
+        node.attrib.pop("id", None)
+    return clone
 
 
 def modify_stroke_style(
@@ -737,71 +758,174 @@ def create_clipped_layer(
     return output_group
 
 
-def parse_viewbox(root: ET.Element) -> tuple[float, float, float, float]:
-    """Parse viewBox from SVG root element.
+def _path_control_bbox(d: str) -> tuple[float, float, float, float]:
+    """Compute a bounding box from all coordinates in a path 'd' string.
+
+    Uses the convex-hull property of cubic Bézier curves: the curve is
+    always contained within the convex hull of its control points, so
+    the control-point bbox is a conservative (slightly oversized) bound.
 
     Returns:
-        Tuple of (min_x, min_y, width, height).
+        (min_x, min_y, max_x, max_y).
     """
-    viewbox = root.get("viewBox")
-    if viewbox:
-        parts = viewbox.split()
-        return (float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3]))
+    segments = _parse_path_to_absolute(d)
+    xs: list[float] = []
+    ys: list[float] = []
+    for _cmd, pts in segments:
+        for x, y in pts:
+            xs.append(x)
+            ys.append(y)
+    return (min(xs), min(ys), max(xs), max(ys))
 
-    # Fall back to width/height attributes
-    width = float(root.get("width", "256"))
-    height = float(root.get("height", "256"))
-    return (0, 0, width, height)
+
+def _ellipse_bbox(elem: ET.Element) -> tuple[float, float, float, float]:
+    """Compute a bounding box for an ellipse element, accounting for transform.
+
+    Returns:
+        (min_x, min_y, max_x, max_y).
+    """
+    cx = float(elem.get("cx", "0"))
+    cy = float(elem.get("cy", "0"))
+    rx = float(elem.get("rx", "0"))
+    ry = float(elem.get("ry", "0"))
+
+    transform = elem.get("transform", "")
+    if transform.startswith("matrix("):
+        # Parse matrix(a,b,c,d,e,f)
+        values = transform[7:-1].split(",")
+        a, b, c, d, e, f = (float(v) for v in values)
+    elif transform.startswith("rotate("):
+        angle = float(transform[7:-1])
+        rad = math.radians(angle)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        a, b, c, d, e, f = cos_a, sin_a, -sin_a, cos_a, 0.0, 0.0
+    else:
+        a, b, c, d, e, f = 1.0, 0.0, 0.0, 1.0, 0.0, 0.0
+
+    # Transform center
+    tcx = a * cx + c * cy + e
+    tcy = b * cx + d * cy + f
+
+    # For an ellipse under affine transform, the bounding box half-widths are:
+    #   half_w = sqrt((a*rx)^2 + (c*ry)^2)
+    #   half_h = sqrt((b*rx)^2 + (d*ry)^2)
+    half_w = math.sqrt((a * rx) ** 2 + (c * ry) ** 2)
+    half_h = math.sqrt((b * rx) ** 2 + (d * ry) ** 2)
+
+    return (tcx - half_w, tcy - half_h, tcx + half_w, tcy + half_h)
+
+
+def compute_content_bbox(
+    layers: dict[str, ET.Element],
+) -> tuple[float, float, float, float]:
+    """Compute the bounding box of all rendered content.
+
+    Considers paths and ellipses from layers that produce visual output
+    (boundary, whiskers, nose, mouth, eyes), including their mirrored
+    copies.  Spots and eye-highlights are clipped to or inside the
+    boundary, so they don't extend the bbox.
+
+    Returns:
+        (min_x, min_y, max_x, max_y) of the artwork center-lines.
+    """
+    visual_layers = ["boundary", "whiskers", "nose", "mouth", "eyes"]
+    bboxes: list[tuple[float, float, float, float]] = []
+
+    for label in visual_layers:
+        layer = layers.get(label)
+        if layer is None:
+            continue
+
+        for elem in layer.iter():
+            tag = elem.tag
+            if isinstance(tag, str):
+                local = tag.split("}")[-1] if "}" in tag else tag
+            else:
+                continue
+
+            if local == "path":
+                d = elem.get("d")
+                if d:
+                    bb = _path_control_bbox(d)
+                    bboxes.append(bb)
+                    # Mirror
+                    mirror_bb = (256.0 - bb[2], bb[1], 256.0 - bb[0], bb[3])
+                    bboxes.append(mirror_bb)
+            elif local == "ellipse":
+                bb = _ellipse_bbox(elem)
+                bboxes.append(bb)
+                # Mirror
+                mirror_bb = (256.0 - bb[2], bb[1], 256.0 - bb[0], bb[3])
+                bboxes.append(mirror_bb)
+
+    if not bboxes:
+        return (0.0, 0.0, 256.0, 256.0)
+
+    return (
+        min(b[0] for b in bboxes),
+        min(b[1] for b in bboxes),
+        max(b[2] for b in bboxes),
+        max(b[3] for b in bboxes),
+    )
 
 
 def compute_auto_fit_viewbox(
-    original_viewbox: tuple[float, float, float, float],
+    layers: dict[str, ET.Element],
     stroke_width: float,
     target_size: int = 256,
 ) -> tuple[float, float, float, float]:
-    """Compute viewBox that auto-fits content with halo to target size.
+    """Compute a square viewBox that fits all content with halo and margin.
+
+    Measures the actual geometry bounding box from the layer content,
+    then expands by the halo stroke extent and a small margin.
 
     Args:
-        original_viewbox: Original (min_x, min_y, width, height).
+        layers: Dict mapping layer labels to layer elements.
         stroke_width: Original stroke width in source units.
         target_size: Target output size in pixels.
 
     Returns:
         New viewBox as (min_x, min_y, width, height).
     """
-    min_x, min_y, width, height = original_viewbox
+    # Get tight bbox of artwork center-lines
+    content_min_x, content_min_y, content_max_x, content_max_y = compute_content_bbox(
+        layers
+    )
 
-    # The halo extends by (halo_width - original_width) / 2 on each side
-    halo_extension = (HALO_MULTIPLIER - 1) * stroke_width / 2
+    # The halo extends by half the halo width beyond the center-line
+    halo_half = (HALO_MULTIPLIER * stroke_width) / 2
 
-    # Add margin (scaled from 256px target to source units)
+    # Expand bbox by halo extent
+    min_x = content_min_x - halo_half
+    min_y = content_min_y - halo_half
+    max_x = content_max_x + halo_half
+    max_y = content_max_y + halo_half
+
+    width = max_x - min_x
+    height = max_y - min_y
+
+    # Add margin (scaled from target size to source units)
     max_dim = max(width, height)
     margin_in_source = MARGIN * (max_dim / target_size)
+    min_x -= margin_in_source
+    min_y -= margin_in_source
+    width += 2 * margin_in_source
+    height += 2 * margin_in_source
 
-    # Total expansion on each side
-    expansion = halo_extension + margin_in_source
+    # Make it square (center the shorter axis)
+    if width > height:
+        diff = width - height
+        min_y -= diff / 2
+        height = width
+    elif height > width:
+        diff = height - width
+        min_x -= diff / 2
+        width = height
 
-    # New viewBox with expansion
-    new_min_x = min_x - expansion
-    new_min_y = min_y - expansion
-    new_width = width + 2 * expansion
-    new_height = height + 2 * expansion
-
-    # Make it square (use the larger dimension)
-    if new_width > new_height:
-        diff = new_width - new_height
-        new_min_y -= diff / 2
-        new_height = new_width
-    elif new_height > new_width:
-        diff = new_height - new_width
-        new_min_x -= diff / 2
-        new_width = new_height
-
-    return (new_min_x, new_min_y, new_width, new_height)
+    return (min_x, min_y, width, height)
 
 
 def compose_icon_svg(
-    source_root: ET.Element,
     layers: dict[str, ET.Element],
     fills: dict[str, str],
     stroke_width: float,
@@ -809,7 +933,6 @@ def compose_icon_svg(
     """Compose the final icon SVG with layers in correct stacking order.
 
     Args:
-        source_root: Original SVG root element.
         layers: Dict mapping layer labels to layer elements.
         fills: Dict mapping layer labels to fill path 'd' attributes.
         stroke_width: Original stroke width.
@@ -824,9 +947,8 @@ def compose_icon_svg(
         4. Whiskers halo
         5. All black strokes (boundary, whiskers, nose-mouth, eyes)
     """
-    # Get original viewBox and compute auto-fit viewBox
-    original_viewbox = parse_viewbox(source_root)
-    new_viewbox = compute_auto_fit_viewbox(original_viewbox, stroke_width)
+    # Compute viewBox from actual geometry
+    new_viewbox = compute_auto_fit_viewbox(layers, stroke_width)
 
     # Create new SVG root
     ET.register_namespace("", SVG_NS)
@@ -1110,7 +1232,7 @@ def main() -> None:
 
     # Compose output SVG
     print("  Composing icon SVG...")  # noqa: T201
-    icon_svg = compose_icon_svg(source_root, layers, fills, stroke_width)
+    icon_svg = compose_icon_svg(layers, fills, stroke_width)
 
     # Write outputs to HACS brand directory
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
