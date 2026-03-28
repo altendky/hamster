@@ -295,6 +295,15 @@ def _extract_path_d(element: ET.Element) -> str:
     return d
 
 
+# Expected boundary path IDs in source.svg and their roles.
+# Looked up by 'id' attribute so document order doesn't matter.
+BOUNDARY_PATH_IDS = {
+    "ear": "path2344",  # ear/head curve
+    "cheek": "path3544",  # cheek curve
+    "forehead": "path4458",  # forehead connector
+}
+
+
 def create_boundary_center_path(layer: ET.Element) -> str:
     """Build a closed path tracing the center of the boundary strokes.
 
@@ -302,41 +311,46 @@ def create_boundary_center_path(layer: ET.Element) -> str:
     then assembles a closed contour by connecting them (with line segments
     where gaps exist) and mirroring to form the complete face outline.
 
-    The ordering of paths in the source layer matters:
-        - path2344 (ear/head curve): connects ear tip to forehead area
-        - path3544 (cheek curve): connects cheek to chin
-        - path4458 (forehead connector): connects forehead to center line
+    Paths are identified by their ``id`` attribute (see
+    :data:`BOUNDARY_PATH_IDS`), so their document order is irrelevant.
 
     The closed contour traces:
-        path3 (fwd) → path1 (rev) → path2 (fwd) →
-        mirror-path2 (rev) → mirror-path1 (fwd) → mirror-path3 (rev) → Z
+        forehead (fwd) → ear (rev) → cheek (fwd) →
+        mirror-cheek (rev) → mirror-ear (fwd) → mirror-forehead (rev) → Z
 
     Gaps between paths are bridged with straight line segments.
 
     Returns:
         An SVG path 'd' attribute for the closed center-line boundary.
     """
-    # Extract path elements from the layer
-    path_elements = [
-        elem
-        for elem in layer.iter()
-        if elem.tag == f"{{{SVG_NS}}}path" or elem.tag == "path"
-    ]
+    # Build a lookup of path elements by id
+    paths_by_id: dict[str | None, ET.Element] = {}
+    for elem in layer.iter():
+        if elem.tag == f"{{{SVG_NS}}}path" or elem.tag == "path":
+            paths_by_id[elem.get("id")] = elem
 
-    if len(path_elements) != 3:
+    # Resolve each required role by id
+    missing = [
+        f"{role} ({pid})"
+        for role, pid in BOUNDARY_PATH_IDS.items()
+        if pid not in paths_by_id
+    ]
+    if missing:
         msg = (
-            f"Expected 3 boundary paths, found {len(path_elements)}. "
-            f"IDs: {[e.get('id', '?') for e in path_elements]}"
+            f"Missing boundary path(s): {', '.join(missing)}. "
+            f"Found IDs: {[k for k in paths_by_id if k is not None]}"
         )
         raise ValueError(msg)
 
-    # Parse all three paths to absolute coordinates
-    # Order in source: path2344 (ear), path3544 (cheek), path4458 (forehead)
-    parsed = [_parse_path_to_absolute(_extract_path_d(e)) for e in path_elements]
-
-    ear_segs = parsed[0]  # path2344: ear/head curve
-    cheek_segs = parsed[1]  # path3544: cheek curve
-    forehead_segs = parsed[2]  # path4458: forehead connector
+    ear_segs = _parse_path_to_absolute(
+        _extract_path_d(paths_by_id[BOUNDARY_PATH_IDS["ear"]])
+    )
+    cheek_segs = _parse_path_to_absolute(
+        _extract_path_d(paths_by_id[BOUNDARY_PATH_IDS["cheek"]])
+    )
+    forehead_segs = _parse_path_to_absolute(
+        _extract_path_d(paths_by_id[BOUNDARY_PATH_IDS["forehead"]])
+    )
 
     # Build the closed contour.
     #
