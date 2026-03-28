@@ -758,23 +758,175 @@ def create_clipped_layer(
     return output_group
 
 
-def _path_control_bbox(d: str) -> tuple[float, float, float, float]:
-    """Compute a bounding box from all coordinates in a path 'd' string.
+def _cubic_roots_in_01(a: float, b: float, c: float) -> list[float]:
+    """Find real roots of at² + bt + c = 0 that lie in the open interval (0, 1)."""
+    roots: list[float] = []
+    if abs(a) < 1e-12:
+        # Linear: bt + c = 0
+        if abs(b) > 1e-12:
+            t = -c / b
+            if 0 < t < 1:
+                roots.append(t)
+        return roots
 
-    Uses the convex-hull property of cubic Bézier curves: the curve is
-    always contained within the convex hull of its control points, so
-    the control-point bbox is a conservative (slightly oversized) bound.
+    discriminant = b * b - 4 * a * c
+    if discriminant < 0:
+        return roots
+
+    sqrt_d = math.sqrt(discriminant)
+    roots.extend(
+        t for t in ((-b + sqrt_d) / (2 * a), (-b - sqrt_d) / (2 * a)) if 0 < t < 1
+    )
+    return roots
+
+
+def _bezier_eval(p0: float, p1: float, p2: float, p3: float, t: float) -> float:
+    """Evaluate a cubic Bézier at parameter *t* for one coordinate axis."""
+    u = 1 - t
+    return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3
+
+
+def _bezier_derivative(p0: float, p1: float, p2: float, p3: float, t: float) -> float:
+    """Evaluate the first derivative of a cubic Bézier at *t* (one axis)."""
+    u = 1 - t
+    return 3 * u * u * (p1 - p0) + 6 * u * t * (p2 - p1) + 3 * t * t * (p3 - p2)
+
+
+def _bezier_axis_extrema_t(
+    p0: float,
+    p1: float,
+    p2: float,
+    p3: float,
+) -> list[float]:
+    """Return parameter values where a cubic Bézier has axis-aligned extrema.
+
+    Solves d/dt B(t) = 0 for one coordinate axis.  Only returns roots in
+    (0, 1); endpoints are handled separately by callers.
+    """
+    # d/dt B(t) = 3[(1-t)²(p1-p0) + 2(1-t)t(p2-p1) + t²(p3-p2)]
+    # Expanding: at² + bt + c = 0
+    a = -p0 + 3 * p1 - 3 * p2 + p3
+    b = 2 * (p0 - 2 * p1 + p2)
+    c = p1 - p0  # note: the factor 3 cancels in the root-finding
+    return _cubic_roots_in_01(a, b, c)
+
+
+def _stroked_path_visual_bbox(
+    d: str,
+    stroke_half: float,
+    round_caps: bool,
+) -> tuple[float, float, float, float]:
+    """Compute the visual bounding box of a stroked SVG path.
+
+    Accounts for the stroke extending perpendicular to the curve at every
+    point and for round linecaps (semicircles) at open path endpoints.
+
+    Args:
+        d: SVG path ``d`` attribute string.
+        stroke_half: Half the stroke width.
+        round_caps: Whether the stroke uses round linecaps.
 
     Returns:
-        (min_x, min_y, max_x, max_y).
+        (min_x, min_y, max_x, max_y) of the rendered stroke.
     """
     segments = _parse_path_to_absolute(d)
+    if not segments:
+        return (0.0, 0.0, 0.0, 0.0)
+
     xs: list[float] = []
     ys: list[float] = []
-    for _cmd, pts in segments:
-        for x, y in pts:
-            xs.append(x)
-            ys.append(y)
+
+    # Track current point and whether path is closed
+    current: tuple[float, float] | None = None
+    subpath_start: tuple[float, float] | None = None
+    is_closed = False
+    endpoints: list[tuple[float, float]] = []  # open endpoints needing caps
+
+    for cmd, pts in segments:
+        if cmd == "M":
+            # Record previous subpath endpoint if not closed
+            if current is not None and not is_closed:
+                endpoints.append(current)
+            current = pts[0]
+            subpath_start = current
+            is_closed = False
+            # First point of a new subpath is an endpoint (unless later closed)
+            # We'll record it and remove if closed
+            endpoints.append(current)
+
+        elif cmd == "L":
+            end = pts[0]
+            # A line segment: the stroke extends perpendicular to the line.
+            assert current is not None
+            dx = end[0] - current[0]
+            dy = end[1] - current[1]
+            length = math.sqrt(dx * dx + dy * dy)
+            if length > 1e-12:
+                nx = -dy / length * stroke_half
+                ny = dx / length * stroke_half
+                for px, py in (current, end):
+                    xs.extend([px + nx, px - nx])
+                    ys.extend([py + ny, py - ny])
+            else:
+                # Degenerate line: just expand as a point
+                xs.extend([current[0] - stroke_half, current[0] + stroke_half])
+                ys.extend([current[1] - stroke_half, current[1] + stroke_half])
+            current = end
+
+        elif cmd == "C":
+            cp1, cp2, end = pts
+            assert current is not None
+            p0x, p0y = current
+            p1x, p1y = cp1
+            p2x, p2y = cp2
+            p3x, p3y = end
+
+            # Find parameter values where x'(t)=0 or y'(t)=0 — at these
+            # points the stroke extends purely in one axis direction.
+            t_values = [0.0, 1.0]
+            t_values.extend(_bezier_axis_extrema_t(p0x, p1x, p2x, p3x))
+            t_values.extend(_bezier_axis_extrema_t(p0y, p1y, p2y, p3y))
+
+            for t in t_values:
+                bx = _bezier_eval(p0x, p1x, p2x, p3x, t)
+                by = _bezier_eval(p0y, p1y, p2y, p3y, t)
+                dx = _bezier_derivative(p0x, p1x, p2x, p3x, t)
+                dy = _bezier_derivative(p0y, p1y, p2y, p3y, t)
+                length = math.sqrt(dx * dx + dy * dy)
+                if length > 1e-12:
+                    nx = -dy / length * stroke_half
+                    ny = dx / length * stroke_half
+                    xs.extend([bx + nx, bx - nx])
+                    ys.extend([by + ny, by - ny])
+                else:
+                    # Degenerate tangent — expand as a circle
+                    xs.extend([bx - stroke_half, bx + stroke_half])
+                    ys.extend([by - stroke_half, by + stroke_half])
+
+            current = end
+
+        elif cmd == "Z":
+            is_closed = True
+            if subpath_start is not None:
+                current = subpath_start
+
+    # Final subpath endpoint
+    if current is not None and not is_closed:
+        endpoints.append(current)
+
+    # If the path was closed, remove the subpath-start we speculatively added
+    if is_closed and subpath_start is not None and subpath_start in endpoints:
+        endpoints.remove(subpath_start)
+
+    # Round linecaps: add semicircle extent at open endpoints
+    if round_caps:
+        for ex, ey in endpoints:
+            xs.extend([ex - stroke_half, ex + stroke_half])
+            ys.extend([ey - stroke_half, ey + stroke_half])
+
+    if not xs:
+        return (0.0, 0.0, 0.0, 0.0)
+
     return (min(xs), min(ys), max(xs), max(ys))
 
 
@@ -815,19 +967,33 @@ def _ellipse_bbox(elem: ET.Element) -> tuple[float, float, float, float]:
     return (tcx - half_w, tcy - half_h, tcx + half_w, tcy + half_h)
 
 
-def compute_content_bbox(
+def compute_visual_bbox(
     layers: dict[str, ET.Element],
+    stroke_width: float,
 ) -> tuple[float, float, float, float]:
-    """Compute the bounding box of all rendered content.
+    """Compute the visual bounding box of all rendered content.
+
+    Accounts for the actual stroke extent (perpendicular to curves, round
+    linecaps) rather than using a simple fixed expansion of the control-point
+    bounding box.
 
     Considers paths and ellipses from layers that produce visual output
     (boundary, whiskers, nose, mouth, eyes), including their mirrored
     copies.  Spots and eye-highlights are clipped to or inside the
     boundary, so they don't extend the bbox.
 
+    The outermost rendered feature is the halo stroke (width =
+    ``HALO_MULTIPLIER * stroke_width``) on boundary and whisker layers.
+    Other layers use the regular stroke width.
+
+    Args:
+        layers: Dict mapping layer labels to layer elements.
+        stroke_width: Original stroke width in source units.
+
     Returns:
-        (min_x, min_y, max_x, max_y) of the artwork center-lines.
+        (min_x, min_y, max_x, max_y) of the rendered artwork.
     """
+    halo_layers = {"boundary", "whiskers"}
     visual_layers = ["boundary", "whiskers", "nose", "mouth", "eyes"]
     bboxes: list[tuple[float, float, float, float]] = []
 
@@ -835,6 +1001,11 @@ def compute_content_bbox(
         layer = layers.get(label)
         if layer is None:
             continue
+
+        if label in halo_layers:
+            half = (HALO_MULTIPLIER * stroke_width) / 2
+        else:
+            half = stroke_width / 2
 
         for elem in layer.iter():
             tag = elem.tag
@@ -846,13 +1017,19 @@ def compute_content_bbox(
             if local == "path":
                 d = elem.get("d")
                 if d:
-                    bb = _path_control_bbox(d)
+                    bb = _stroked_path_visual_bbox(
+                        d,
+                        stroke_half=half,
+                        round_caps=True,
+                    )
                     bboxes.append(bb)
-                    # Mirror
+                    # Mirror (flip x, y unchanged)
                     mirror_bb = (256.0 - bb[2], bb[1], 256.0 - bb[0], bb[3])
                     bboxes.append(mirror_bb)
             elif local == "ellipse":
                 bb = _ellipse_bbox(elem)
+                # Expand ellipse bbox by stroke half
+                bb = (bb[0] - half, bb[1] - half, bb[2] + half, bb[3] + half)
                 bboxes.append(bb)
                 # Mirror
                 mirror_bb = (256.0 - bb[2], bb[1], 256.0 - bb[0], bb[3])
@@ -876,8 +1053,9 @@ def compute_auto_fit_viewbox(
 ) -> tuple[float, float, float, float]:
     """Compute a square viewBox that fits all content with halo and margin.
 
-    Measures the actual geometry bounding box from the layer content,
-    then expands by the halo stroke extent and a small margin.
+    Uses :func:`compute_visual_bbox` to measure the accurate visual extent
+    of stroked content (including perpendicular stroke offset and round
+    linecaps), then adds a uniform margin and squares the result.
 
     Args:
         layers: Dict mapping layer labels to layer elements.
@@ -887,32 +1065,13 @@ def compute_auto_fit_viewbox(
     Returns:
         New viewBox as (min_x, min_y, width, height).
     """
-    # Get tight bbox of artwork center-lines
-    content_min_x, content_min_y, content_max_x, content_max_y = compute_content_bbox(
-        layers
-    )
-
-    # The halo extends by half the halo width beyond the center-line
-    halo_half = (HALO_MULTIPLIER * stroke_width) / 2
-
-    # Expand bbox by halo extent
-    min_x = content_min_x - halo_half
-    min_y = content_min_y - halo_half
-    max_x = content_max_x + halo_half
-    max_y = content_max_y + halo_half
+    min_x, min_y, max_x, max_y = compute_visual_bbox(layers, stroke_width)
 
     width = max_x - min_x
     height = max_y - min_y
 
-    # Add margin (scaled from target size to source units)
-    max_dim = max(width, height)
-    margin_in_source = MARGIN * (max_dim / target_size)
-    min_x -= margin_in_source
-    min_y -= margin_in_source
-    width += 2 * margin_in_source
-    height += 2 * margin_in_source
-
-    # Make it square (center the shorter axis)
+    # Make it square first (center the shorter axis) so that the margin
+    # calculation uses the final dimension.
     if width > height:
         diff = width - height
         min_y -= diff / 2
@@ -921,6 +1080,13 @@ def compute_auto_fit_viewbox(
         diff = height - width
         min_x -= diff / 2
         width = height
+
+    # Add margin (scaled from final square size to source units)
+    margin_in_source = MARGIN * (width / target_size)
+    min_x -= margin_in_source
+    min_y -= margin_in_source
+    width += 2 * margin_in_source
+    height += 2 * margin_in_source
 
     return (min_x, min_y, width, height)
 
