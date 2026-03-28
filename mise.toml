@@ -12,3 +12,7 @@ python.uv_venv_auto = "create|source"
 [env]
 # Ensure uv uses the mise-managed Python interpreter, not a system one.
 UV_PYTHON = { value = "{{ tools.python.path }}", tools = true }
+
+[tasks.generate-icons]
+description = "Generate brand icons from source SVG"
+run = "python brand/generate.py"

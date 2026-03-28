@@ -8,5 +8,9 @@ hass = "hass"
 # "alls-green" is a GitHub Action (re-actors/alls-green) used in CI.
 alls = "alls"
 
+[default.extend-identifiers]
+# PNG is a valid image format acronym
+PNGs = "PNGs"
+
 [files]
 extend-exclude = []
