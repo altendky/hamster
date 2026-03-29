@@ -113,9 +113,9 @@ from them.
 
 | Layer | Behavioral Contract | Structural |
 | --- | --- | --- |
-| `hamster.mcp._core` | **No I/O, no global state.** Pure functions and data types only. | Must not import `_io` or `component`. |
-| `hamster.mcp._io` | **Async I/O adapter.** Bridges HTTP to the sans-IO core. | May import `_core`. Does not import `homeassistant` (HA-independent for testability). |
-| `hamster.component` | **HA integration.** No behavioral restrictions. | May import everything. |
+| `hamster_mcp.mcp._core` | **No I/O, no global state.** Pure functions and data types only. | Must not import `_io` or `component`. |
+| `hamster_mcp.mcp._io` | **Async I/O adapter.** Bridges HTTP to the sans-IO core. | May import `_core`. Does not import `homeassistant` (HA-independent for testability). |
+| `hamster_mcp.component` | **HA integration.** No behavioral restrictions. | May import everything. |
 
 The key insight: `_core` is defined by what its code *does* (no I/O, no global
 state), not by what it *imports*.

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "hamster"
+name = "hamster-mcp"
 version = "0.1.0"
 description = "Home Assistant MCP Server — exposes HA capabilities via the Model Context Protocol"
 readme = "README.md"
@@ -33,7 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Test dependencies — installable by users to verify their install:
-#   pip install hamster[test] && pytest --pyargs hamster
+#   pip install hamster-mcp[test] && pytest --pyargs hamster_mcp
 test = [
     "pytest",
     "pytest-asyncio",
@@ -41,7 +41,7 @@ test = [
 ]
 # Development tools — linting, type checking, component testing
 dev = [
-    "hamster[test,component-test]",
+    "hamster-mcp[test,component-test]",
     "ruff>=0.11",
     "mypy",
     "cairosvg",
@@ -49,7 +49,7 @@ dev = [
 ]
 # Component tests — requires Home Assistant test infrastructure
 component-test = [
-    "hamster[test]",
+    "hamster-mcp[test]",
     "pytest-homeassistant-custom-component>=0.13",
 ]
 docs = [
@@ -57,13 +57,13 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/altendky/hamster"
-Documentation = "https://github.com/altendky/hamster"
-Repository = "https://github.com/altendky/hamster"
-Issues = "https://github.com/altendky/hamster/issues"
+Homepage = "https://github.com/altendky/hamster-mcp"
+Documentation = "https://github.com/altendky/hamster-mcp"
+Repository = "https://github.com/altendky/hamster-mcp"
+Issues = "https://github.com/altendky/hamster-mcp/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/hamster"]
+packages = ["src/hamster_mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["src"]
@@ -105,9 +105,9 @@ convention = "google"
 
 [tool.ruff.lint.isort]
 force-sort-within-sections = true
-known-first-party = ["hamster"]
+known-first-party = ["hamster_mcp"]
 
 [tool.mypy]
 strict = true
-packages = ["hamster"]
+packages = ["hamster_mcp"]
 mypy_path = "src"

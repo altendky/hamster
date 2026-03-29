@@ -49,18 +49,18 @@ The source SVG should contain black stroke-based line art with uniform stroke
 width. The script applies amber (`#c87f43`) fill and halo (3x stroke width),
 auto-fits to the canvas, then exports PNG icons at 256x256 and 512x512.
 
-Generated files (written to `custom_components/hamster/brand/`):
+Generated files (written to `custom_components/hamster_mcp/brand/`):
 
 - `icon.svg`, `icon.png`, `icon@2x.png`
 
 ## Package Structure
 
-- `src/hamster/mcp/_core/` --- sans-IO protocol core.
+- `src/hamster_mcp/mcp/_core/` --- sans-IO protocol core.
   **Must not** perform I/O or hold global state.
   May depend on any library as long as the code itself remains pure.
-- `src/hamster/mcp/_io/` --- I/O adapters (async transport).
+- `src/hamster_mcp/mcp/_io/` --- I/O adapters (async transport).
   Does not import `homeassistant` (HA-independent for testability).
-- `src/hamster/component/` --- HA integration.
+- `src/hamster_mcp/component/` --- HA integration.
   May import anything.
-- `custom_components/hamster/` --- HACS deployment shim.
-  Thin re-exports from `hamster.component`.
+- `custom_components/hamster_mcp/` --- HACS deployment shim.
+  Thin re-exports from `hamster_mcp.component`.

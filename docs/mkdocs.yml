@@ -1,8 +1,8 @@
-site_name: Hamster
+site_name: Hamster MCP
 site_description: Home Assistant MCP Server
-site_url: https://altendky.github.io/hamster
-repo_url: https://github.com/altendky/hamster
-repo_name: altendky/hamster
+site_url: https://altendky.github.io/hamster-mcp
+repo_url: https://github.com/altendky/hamster-mcp
+repo_name: altendky/hamster-mcp
 
 docs_dir: src
 

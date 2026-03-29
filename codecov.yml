@@ -28,12 +28,12 @@ component_management:
     - component_id: core
       name: MCP Core (sans-IO)
       paths:
-        - src/hamster/mcp/_core/**
+        - src/hamster_mcp/mcp/_core/**
     - component_id: io
       name: MCP I/O Adapter
       paths:
-        - src/hamster/mcp/_io/**
+        - src/hamster_mcp/mcp/_io/**
     - component_id: component
       name: HA Component
       paths:
-        - src/hamster/component/**
+        - src/hamster_mcp/component/**

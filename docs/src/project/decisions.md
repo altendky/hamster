@@ -56,12 +56,12 @@ SSE streaming within responses is optional and deferred.
 
 ## D005: Monorepo with Separate PyPI Package
 
-**Decision:** Single repo containing both `src/hamster/` (PyPI package) and
-`custom_components/hamster/` (HACS shim).
+**Decision:** Single repo containing both `src/hamster_mcp/` (PyPI package) and
+`custom_components/hamster_mcp/` (HACS shim).
 
 **Rationale:** HACS requires `custom_components/<domain>/` at the repo root.
 HACS ignores everything else, so the library code in `src/` does not interfere.
-The `manifest.json` declares `requirements: ["hamster"]` so HA pip-installs the
+The `manifest.json` declares `requirements: ["hamster-mcp"]` so HA pip-installs the
 library automatically.
 
 ## D006: Hatchling Build Backend
@@ -69,7 +69,7 @@ library automatically.
 **Decision:** Use hatchling instead of setuptools.
 
 **Rationale:** Cleaner src/ layout support
-(`packages = ["src/hamster"]` --- one line, unambiguous).
+(`packages = ["src/hamster_mcp"]` --- one line, unambiguous).
 Built-in version management (no setuptools-scm dependency).
 Lighter (~500KB vs ~1.5MB).
 PyPA-maintained.
@@ -101,7 +101,7 @@ Standard Rust ecosystem convention that works equally well for Python.
 HA core's choices where applicable.
 
 **Rationale:** Fit the ecosystem.
-Developers familiar with HA core should find hamster's tooling familiar.
+Developers familiar with HA core should find hamster-mcp's tooling familiar.
 Language-agnostic tools (typos, markdownlint, actionlint, lychee) carried over
 from onshape-mcp.
 
@@ -136,8 +136,8 @@ The 4 fixed meta-tool names are hardcoded constants
 ## D013: Use pytest-homeassistant-custom-component
 
 **Decision:** Use `pytest-homeassistant-custom-component` for
-`hamster.component._tests/`.
-Do not use it for `hamster.mcp._tests/`.
+`hamster_mcp.component._tests/`.
+Do not use it for `hamster_mcp.mcp._tests/`.
 
 **Rationale:** It is the standard tool for testing HA custom components (~3M
 downloads/month, no alternative).
@@ -146,9 +146,9 @@ users, HTTP test clients, registries, config entries, etc.
 
 The split is clean:
 
-- `hamster.mcp._tests/` --- pure Python, no HA dependency, fast.
+- `hamster_mcp.mcp._tests/` --- pure Python, no HA dependency, fast.
   Tests the sans-IO core and I/O adapter.
-- `hamster.component._tests/` --- uses `pytest-homeassistant-custom-component`.
+- `hamster_mcp.component._tests/` --- uses `pytest-homeassistant-custom-component`.
   Tests the HA integration with realistic infrastructure.
 
 **Trade-offs accepted:**
@@ -163,7 +163,7 @@ The split is clean:
 Test dependencies are a separate optional extras group (`test`).
 
 **Rationale:** Users can verify their install with
-`pip install hamster[test] && pytest --pyargs hamster`.
+`pip install hamster-mcp[test] && pytest --pyargs hamster_mcp`.
 This is what `attrs`, `trio`, and other well-regarded libraries do.
 The size cost is negligible.
 Test dependencies (pytest, etc.) are not installed unless the user opts in via
@@ -175,7 +175,7 @@ the `test` extra.
 No task per connection.
 At most one I/O-layer task for timeout wakeups, or zero when no sessions exist.
 
-**Design:** `SessionManager` lives in `hamster.mcp._core.session`.
+**Design:** `SessionManager` lives in `hamster_mcp.mcp._core.session`.
 It is a multi-session container: it routes messages to sessions by ID, creates
 new sessions on `initialize`, tracks last-activity timestamps, and computes the
 next wakeup time.
@@ -194,7 +194,7 @@ The I/O layer sleeps until the deadline and hands the token back.  This keeps
 all timing logic in the pure core while allowing future wakeup reasons without
 changing the I/O layer.
 
-See `src/hamster/mcp/_core/session.py` for the full `SessionManager`
+See `src/hamster_mcp/mcp/_core/session.py` for the full `SessionManager`
 implementation.
 
 **Rationale:** This follows the sans-IO principle: all routing, timeout, and
@@ -515,7 +515,7 @@ request and cached.
 - Network access required for initial fetch.
 
 **Future considerations:** Alternative strategies (date-based matching,
-bundling at Hamster release, local docs path for dev installs) are
+bundling at Hamster MCP release, local docs path for dev installs) are
 documented in open questions Q025-Q027.
 
 **Relationship to D018:** This enrichment *supplements* the raw HA
@@ -548,7 +548,7 @@ independently of Supervisor availability.
 **Decision:** The WebSocket command group is named `hass`, not `ws` or
 other alternatives.
 
-**Rationale:** "ws" refers to the WebSocket protocol, but Hamster accesses
+**Rationale:** "ws" refers to the WebSocket protocol, but Hamster MCP accesses
 the underlying command registry directly (not via WebSocket).  "hass" is
 the conventional name for the Home Assistant core object in HA's codebase
 (`hass` is the variable name used everywhere for the `HomeAssistant`
@@ -571,8 +571,8 @@ path-based addressing:
 - `hamster_services_call` → `call`
 - `hamster_services_schema` → `schema`
 
-MCP clients prefix tool names with the server name ("hamster"), so clients
-see these as `hamster_search`, `hamster_explain`, etc.
+MCP clients prefix tool names with the server name ("hamster-mcp"), so clients
+see these as `hamster-mcp_search`, `hamster-mcp_explain`, etc.
 
 **Rationale:** The multi-source architecture (D024) uses a unified
 `<group>/<path>` addressing scheme.  Generic tool names with path

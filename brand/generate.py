@@ -82,7 +82,7 @@ LAYER_CONFIG = {
 # Paths
 BRAND_DIR = Path(__file__).parent
 SOURCE_SVG = BRAND_DIR / "source.svg"
-OUTPUT_DIR = BRAND_DIR.parent / "custom_components" / "hamster" / "brand"
+OUTPUT_DIR = BRAND_DIR.parent / "custom_components" / "hamster_mcp" / "brand"
 
 # SVG namespaces
 SVG_NS = "http://www.w3.org/2000/svg"

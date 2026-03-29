@@ -1712,7 +1712,7 @@ wheels = [
 ]
 
 [[package]]
-name = "hamster"
+name = "hamster-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -1768,8 +1768,8 @@ test = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.11" },
     { name = "cairosvg", marker = "extra == 'dev'" },
-    { name = "hamster", extras = ["test"], marker = "extra == 'component-test'" },
-    { name = "hamster", extras = ["test", "component-test"], marker = "extra == 'dev'" },
+    { name = "hamster-mcp", extras = ["test"], marker = "extra == 'component-test'" },
+    { name = "hamster-mcp", extras = ["test", "component-test"], marker = "extra == 'dev'" },
     { name = "homeassistant", specifier = ">=2025.2" },
     { name = "mkdocs-material", marker = "extra == 'docs'" },
     { name = "mypy", marker = "extra == 'dev'" },

@@ -1,23 +1,23 @@
-# <img src="custom_components/hamster/brand/icon.svg" alt="Hamster icon" width="64"> Hamster
+# <img src="custom_components/hamster_mcp/brand/icon.svg" alt="Hamster icon" width="64"> Hamster MCP
 
 [![HACS: Custom](https://img.shields.io/badge/HACS-Custom-orange)](https://hacs.xyz/)
 [![HA: 2025.2+](https://img.shields.io/badge/HA-2025.2+-blue)](https://www.home-assistant.io/)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
-[![CI](https://github.com/altendky/hamster/actions/workflows/ci.yml/badge.svg)](https://github.com/altendky/hamster/actions/workflows/ci.yml)
+[![CI](https://github.com/altendky/hamster-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/altendky/hamster-mcp/actions/workflows/ci.yml)
 
 Home Assistant MCP Server — exposes HA's full capabilities via the
 [Model Context Protocol](https://modelcontextprotocol.io/).
 
 ## What Is This?
 
-Hamster is a Home Assistant custom component that runs an
+Hamster MCP is a Home Assistant custom component that runs an
 [MCP](https://modelcontextprotocol.io/) server inside your HA instance.
 It lets AI assistants and other MCP clients — such as Claude Desktop,
 OpenCode, Cursor, or any tool that speaks the Model Context Protocol — interact
 with your smart home: query states, call services, browse registries,
 debug automations, and more.
 
-Hamster discovers all available services and their schemas automatically
+Hamster MCP discovers all available services and their schemas automatically
 at runtime — no static tool definitions to maintain.
 
 The MCP endpoint is served by Home Assistant itself, so it is reachable
@@ -58,7 +58,7 @@ remote MCP clients such as Claude.ai and ChatGPT can connect as well.
 1. Install [HACS](https://hacs.xyz/) if you haven't already.
 2. Add this repository as a [custom repository](https://hacs.xyz/docs/faq/custom_repositories/) in HACS:
    - Go to HACS → Integrations → Menu (three dots) → Custom repositories
-   - URL: `https://github.com/altendky/hamster`
+   - URL: `https://github.com/altendky/hamster-mcp`
    - Category: Integration
 3. Search for "Hamster MCP" in HACS and install it.
 4. Restart Home Assistant.
@@ -66,7 +66,7 @@ remote MCP clients such as Claude.ai and ChatGPT can connect as well.
 
 ### Manual Installation
 
-1. Copy the `custom_components/hamster` directory to your Home Assistant
+1. Copy the `custom_components/hamster_mcp` directory to your Home Assistant
    `config/custom_components/` directory.
 2. Restart Home Assistant.
 3. Add the integration via [Settings → Devices & Services](https://my.home-assistant.io/redirect/integrations/) → Add Integration → Hamster MCP.
@@ -75,7 +75,7 @@ remote MCP clients such as Claude.ai and ChatGPT can connect as well.
 
 Point your MCP client at your Home Assistant instance with these settings:
 
-- **URL:** `https://<your-ha-host>/api/hamster`
+- **URL:** `https://<your-ha-host>/api/hamster_mcp`
 - **Transport:** Streamable HTTP
 - **Authentication:** MCP clients that support OAuth (such as OpenCode)
   will prompt you to log in through Home Assistant automatically.

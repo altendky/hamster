@@ -1,13 +1,13 @@
 # MCP Protocol
 
-Hamster implements the
+Hamster MCP implements the
 [Model Context Protocol](https://modelcontextprotocol.io/specification/2025-03-26)
 Streamable HTTP transport.
 The implementation is direct --- no MCP SDK dependency.
 
 ## Transport: Streamable HTTP
 
-A single HTTP endpoint at `/api/hamster` handles all MCP communication.
+A single HTTP endpoint at `/api/hamster_mcp` handles all MCP communication.
 
 | Method | Purpose | Response |
 | --- | --- | --- |
@@ -104,7 +104,7 @@ request), `-32601` (method not found), `-32602` (invalid params),
 
 ## Authentication
 
-Hamster uses Home Assistant's built-in authentication.
+Hamster MCP uses Home Assistant's built-in authentication.
 The `HomeAssistantView` is registered with `requires_auth = True`, which means
 HA automatically validates Bearer tokens before the request reaches our code.
 

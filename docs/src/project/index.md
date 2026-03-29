@@ -1,14 +1,14 @@
-# Hamster
+# Hamster MCP
 
 A Home Assistant custom component that exposes HA's full capabilities via the
 Model Context Protocol (MCP).
 The project emphasizes testability through sans-IO design principles and
 a meta-tool API gateway pattern.
 
-## What Makes Hamster Different
+## What Makes Hamster MCP Different
 
 Every existing HA MCP project defines tools statically in code.
-Hamster uses a **meta-tool pattern** --- 4 fixed MCP tools
+Hamster MCP uses a **meta-tool pattern** --- 4 fixed MCP tools
 (`search`, `explain`, `call`, `schema`) that let the LLM dynamically
 discover and invoke any HA service.  Service metadata is sourced from
 `async_get_all_descriptions()`, which returns field definitions, selectors,

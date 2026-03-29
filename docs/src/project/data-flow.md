@@ -54,7 +54,7 @@ sequenceDiagram
     participant Transport as AiohttpMCPTransport
     participant Manager as SessionManager (sans-IO)
 
-    Client->>Transport: POST /api/hamster<br/>initialize request (no session ID)
+    Client->>Transport: POST /api/hamster_mcp<br/>initialize request (no session ID)
     Note over Transport: Read body bytes<br/>Build IncomingRequest
     Transport->>Manager: receive_request(IncomingRequest, now)
     Note over Manager: Validate headers, parse JSON,<br/>parse JSON-RPC<br/>No session ID → create new session<br/>via session_id_factory<br/>Transition → INITIALIZING
@@ -62,7 +62,7 @@ sequenceDiagram
     Note over Transport: Translate to HTTP response
     Transport-->>Client: HTTP 200<br/>Mcp-Session-Id: &lt;id&gt;
 
-    Client->>Transport: POST /api/hamster<br/>notifications/initialized<br/>Mcp-Session-Id: &lt;id&gt;
+    Client->>Transport: POST /api/hamster_mcp<br/>notifications/initialized<br/>Mcp-Session-Id: &lt;id&gt;
     Note over Transport: Build IncomingRequest
     Transport->>Manager: receive_request(IncomingRequest, now)
     Note over Manager: Validate, parse, look up session<br/>Transition → ACTIVE
@@ -73,7 +73,7 @@ sequenceDiagram
 ## Tool List Flow
 
 The tool list is constant --- 4 fixed meta-tools defined in
-`hamster.mcp._core.tools.TOOLS`.  The `SessionManager` always returns the
+`hamster_mcp.mcp._core.tools.TOOLS`.  The `SessionManager` always returns the
 same list.  No regeneration is needed when services change (only the
 `ServiceIndex` is rebuilt).
 
@@ -83,7 +83,7 @@ sequenceDiagram
     participant Transport as AiohttpMCPTransport
     participant Manager as SessionManager (sans-IO)
 
-    Client->>Transport: POST /api/hamster<br/>tools/list<br/>Mcp-Session-Id: &lt;id&gt;
+    Client->>Transport: POST /api/hamster_mcp<br/>tools/list<br/>Mcp-Session-Id: &lt;id&gt;
     Note over Transport: Build IncomingRequest
     Transport->>Manager: receive_request(IncomingRequest, now)
     Note over Manager: Validate headers, parse JSON/JSON-RPC<br/>Look up session by ID<br/>Validate state: ACTIVE<br/>Build response from constant TOOLS
@@ -107,7 +107,7 @@ sequenceDiagram
     participant Transport as AiohttpMCPTransport
     participant Manager as SessionManager (sans-IO)
 
-    Client->>Transport: POST /api/hamster<br/>tools/call hamster_services_search<br/>Mcp-Session-Id: &lt;id&gt;
+    Client->>Transport: POST /api/hamster_mcp<br/>tools/call hamster_services_search<br/>Mcp-Session-Id: &lt;id&gt;
     Note over Transport: Build IncomingRequest
     Transport->>Manager: receive_request(IncomingRequest, now)
     Note over Manager: Validate, parse, look up session<br/>call_tool(name, args, index)<br/>→ Done(CallToolResult)
@@ -128,7 +128,7 @@ sequenceDiagram
     participant Manager as SessionManager (sans-IO)
     participant Effect as EffectHandler (component)
 
-    Client->>Transport: POST /api/hamster<br/>tools/call hamster_services_call<br/>Mcp-Session-Id: &lt;id&gt;
+    Client->>Transport: POST /api/hamster_mcp<br/>tools/call hamster_services_call<br/>Mcp-Session-Id: &lt;id&gt;
     Note over Transport: Build IncomingRequest
     Transport->>Manager: receive_request(IncomingRequest, now)
     Note over Manager: Validate, parse, look up session<br/>call_tool(name, args, index)<br/>→ ServiceCall(domain, service, target, data)
@@ -147,7 +147,7 @@ sequenceDiagram
 
 ## Service Index (Pure Construction)
 
-The `ServiceIndex` class lives in `hamster.mcp._core.tools` --- its
+The `ServiceIndex` class lives in `hamster_mcp.mcp._core.tools` --- its
 constructor is pure (no I/O, no global state).  The component layer
 calls `async_get_all_descriptions(hass)` and feeds the result in, then
 updates the `SessionManager`'s index:

@@ -6,16 +6,16 @@
 block-beta
     columns 1
     block:deploy["Deployment Layer"]
-        d1["custom_components/hamster/<br/>HACS shim — thin re-exports + HA data files"]
+        d1["custom_components/hamster_mcp/<br/>HACS shim — thin re-exports + HA data files"]
     end
     block:app["Application Layer"]
-        a1["hamster.component<br/>HA integration — config flow, views, effect execution"]
+        a1["hamster_mcp.component<br/>HA integration — config flow, views, effect execution"]
     end
     block:integration["Integration Layer"]
-        i1["hamster.mcp._io<br/>aiohttp Streamable HTTP transport adapter"]
+        i1["hamster_mcp.mcp._io<br/>aiohttp Streamable HTTP transport adapter"]
     end
     block:core["Core Layer"]
-        c1["hamster.mcp._core<br/>sans-IO MCP protocol + meta-tool dispatch<br/>No I/O — no global state"]
+        c1["hamster_mcp.mcp._core<br/>sans-IO MCP protocol + meta-tool dispatch<br/>No I/O — no global state"]
     end
 
     d1 --> a1
@@ -29,9 +29,9 @@ flow through each layer.
 ## Package Layout
 
 ```text
-hamster/
+hamster-mcp/
 ├── src/
-│   └── hamster/
+│   └── hamster_mcp/
 │       ├── __init__.py
 │       ├── mcp/                          # MCP protocol submodule
 │       │   ├── __init__.py               # Public API re-exports
@@ -55,8 +55,8 @@ hamster/
 │           └── _tests/
 │               └── ...
 ├── custom_components/
-│   └── hamster/                          # HACS deployment shim
-│       ├── __init__.py                   # Re-exports from hamster.component
+│   └── hamster_mcp/                          # HACS deployment shim
+│       ├── __init__.py                   # Re-exports from hamster_mcp.component
 │       ├── config_flow.py                # Re-exports
 │       ├── brand/
 │       │   └── icon.png
@@ -80,17 +80,17 @@ hamster/
 
 | Module | Layer | Purpose |
 | --- | --- | --- |
-| `hamster.mcp._core.types` | Core | MCP data types: `Tool`, `Content`, `ServerInfo`, `ServerCapabilities`, `IncomingRequest` |
-| `hamster.mcp._core.jsonrpc` | Core | JSON-RPC 2.0 message parsing and response building |
-| `hamster.mcp._core.events` | Core | `ReceiveResult` types (`SendResponse`, `RunEffects`) and tool effect/continuation types (`Done`, `ServiceCall`, `FormatServiceResponse`) |
-| `hamster.mcp._core.session` | Core | `SessionManager` --- HTTP-to-protocol pipeline; validates headers, parses JSON/JSON-RPC, routes by session ID, creates sessions via injected `session_id_factory`, tracks timeouts, builds responses. `MCPServerSession` --- per-session sans-IO state machine. |
-| `hamster.mcp._core.tools` | Core | 4 fixed meta-tool definitions (`TOOLS`), `ServiceIndex`, `call_tool()`, `resume()`, selector descriptions |
-| `hamster.mcp._io.aiohttp` | Integration | `AiohttpMCPTransport` --- thin adapter; extracts headers/body from aiohttp, delegates to `SessionManager`, runs effect dispatch loop. Timeout wakeup loop. `EffectHandler` protocol definition. |
-| `hamster.component` | Application | HA integration entry point (`async_setup_entry`, `async_unload_entry`) |
-| `hamster.component.config_flow` | Application | Config flow (setup) + options flow (tristate control) |
-| `hamster.component.http` | Application | `HamsterMCPView` --- `HomeAssistantView` subclass, wires transport + HA auth. `HamsterEffectHandler` --- implements `EffectHandler`, executes `hass.services.async_call()`. |
-| `hamster.component.const` | Application | Domain constant, defaults |
-| `custom_components/hamster/` | Deployment | HACS shim --- thin re-exports so HA can discover the integration |
+| `hamster_mcp.mcp._core.types` | Core | MCP data types: `Tool`, `Content`, `ServerInfo`, `ServerCapabilities`, `IncomingRequest` |
+| `hamster_mcp.mcp._core.jsonrpc` | Core | JSON-RPC 2.0 message parsing and response building |
+| `hamster_mcp.mcp._core.events` | Core | `ReceiveResult` types (`SendResponse`, `RunEffects`) and tool effect/continuation types (`Done`, `ServiceCall`, `FormatServiceResponse`) |
+| `hamster_mcp.mcp._core.session` | Core | `SessionManager` --- HTTP-to-protocol pipeline; validates headers, parses JSON/JSON-RPC, routes by session ID, creates sessions via injected `session_id_factory`, tracks timeouts, builds responses. `MCPServerSession` --- per-session sans-IO state machine. |
+| `hamster_mcp.mcp._core.tools` | Core | 4 fixed meta-tool definitions (`TOOLS`), `ServiceIndex`, `call_tool()`, `resume()`, selector descriptions |
+| `hamster_mcp.mcp._io.aiohttp` | Integration | `AiohttpMCPTransport` --- thin adapter; extracts headers/body from aiohttp, delegates to `SessionManager`, runs effect dispatch loop. Timeout wakeup loop. `EffectHandler` protocol definition. |
+| `hamster_mcp.component` | Application | HA integration entry point (`async_setup_entry`, `async_unload_entry`) |
+| `hamster_mcp.component.config_flow` | Application | Config flow (setup) + options flow (tristate control) |
+| `hamster_mcp.component.http` | Application | `HamsterMCPView` --- `HomeAssistantView` subclass, wires transport + HA auth. `HamsterEffectHandler` --- implements `EffectHandler`, executes `hass.services.async_call()`. |
+| `hamster_mcp.component.const` | Application | Domain constant, defaults |
+| `custom_components/hamster_mcp/` | Deployment | HACS shim --- thin re-exports so HA can discover the integration |
 
 ## Core API: `ReceiveResult`
 
@@ -148,17 +148,17 @@ implementation.
 
 ```mermaid
 flowchart TB
-    subgraph component["hamster.component"]
+    subgraph component["hamster_mcp.component"]
         view["HamsterMCPView\n(HomeAssistantView)"]
         handler["HamsterEffectHandler"]
     end
 
-    subgraph io["hamster.mcp._io"]
+    subgraph io["hamster_mcp.mcp._io"]
         transport["AiohttpMCPTransport\n(thin adapter + effect dispatch)"]
         protocol["«Protocol» EffectHandler\nexecute_service_call()"]
     end
 
-    subgraph core["hamster.mcp._core"]
+    subgraph core["hamster_mcp.mcp._core"]
         manager["SessionManager\n(HTTP→protocol pipeline,\nvalidation, parsing, routing,\nservice index, timeouts)"]
         session["MCPServerSession\n(per-session state machine)"]
     end
@@ -170,7 +170,7 @@ flowchart TB
     handler -.->|implements| protocol
 ```
 
-Defined in `hamster.mcp._io`, implemented by `hamster.component`:
+Defined in `hamster_mcp.mcp._io`, implemented by `hamster_mcp.component`:
 
 ```python
 class EffectHandler(Protocol):
@@ -228,10 +228,10 @@ The project produces two artifacts from a single repository:
 
 | Artifact | Mechanism | Contains |
 | --- | --- | --- |
-| `hamster` on PyPI | `pip install hamster` | `hamster.mcp` + `hamster.component` (the library) |
-| `custom_components/hamster/` via HACS | HACS git clone | Thin shim files + `manifest.json` + UI strings |
+| `hamster-mcp` on PyPI | `pip install hamster-mcp` | `hamster_mcp.mcp` + `hamster_mcp.component` (the library) |
+| `custom_components/hamster_mcp/` via HACS | HACS git clone | Thin shim files + `manifest.json` + UI strings |
 
-The `manifest.json` declares `"requirements": ["hamster>=0.1.0"]`, so when HA
+The `manifest.json` declares `"requirements": ["hamster-mcp>=0.1.0"]`, so when HA
 loads the custom component it automatically pip-installs the library.
 
 ## Why a Custom Component
@@ -270,15 +270,15 @@ Trade-offs accepted:
 | `ha-mcp` (community) | Standalone/add-on | 95+ | Static | Token |
 | `hass-mcp-server` (ganhammar) | Custom component | 21 | Static | OAuth |
 | `mcp-assist` | Custom component | 11 | Index pattern | IP whitelist |
-| **Hamster** | Custom component | 4 meta-tools | **Dynamic multi-source discovery** | HA built-in |
+| **Hamster MCP** | Custom component | 4 meta-tools | **Dynamic multi-source discovery** | HA built-in |
 
-Hamster's unique position: meta-tool API gateway pattern (search/explain/call/schema)
+Hamster MCP's unique position: meta-tool API gateway pattern (search/explain/call/schema)
 giving access to HA services, WebSocket commands, and Supervisor APIs via 4 fixed
 tools.  Built-in HA auth, full admin access.  No existing project uses this approach.
 
 ## Multi-Source Architecture
 
-Hamster exposes HA capabilities through three distinct source groups, each with
+Hamster MCP exposes HA capabilities through three distinct source groups, each with
 its own discovery mechanism and metadata enrichment.  See
 [D024](decisions.md#d024-multi-source-architecture) for design rationale.
 

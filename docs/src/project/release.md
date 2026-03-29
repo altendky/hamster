@@ -6,9 +6,9 @@ Placeholder --- to be written when release infrastructure is built.
 
 | Channel | Artifact | Mechanism |
 | --- | --- | --- |
-| PyPI | `hamster` package | GitHub release → publish workflow |
-| HACS (custom) | `custom_components/hamster/` | Users add repo URL manually |
-| HACS (default) | `custom_components/hamster/` | Submit to HACS default repository list |
+| PyPI | `hamster-mcp` package | GitHub release → publish workflow |
+| HACS (custom) | `custom_components/hamster_mcp/` | Users add repo URL manually |
+| HACS (default) | `custom_components/hamster_mcp/` | Submit to HACS default repository list |
 
 ## Versioning
 

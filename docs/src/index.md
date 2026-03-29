@@ -1,11 +1,11 @@
-# Hamster
+# Hamster MCP
 
 **Home Assistant MCP Server** --- exposes HA's full capabilities via the Model
 Context Protocol.
 
-Hamster is a Home Assistant custom component that dynamically generates MCP
+Hamster MCP is a Home Assistant custom component that dynamically generates MCP
 tools from HA's service registry at runtime.
-Unlike other HA MCP projects that define tools statically, Hamster discovers
+Unlike other HA MCP projects that define tools statically, Hamster MCP discovers
 all available services and their schemas automatically.
 
 ## Quick Links
